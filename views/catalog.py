@@ -146,17 +146,18 @@ class ConfirmPurchaseView(ui.View):
         except Exception as e:
             logger.debug("Gagal menghapus pesan konfirmasi pembelian: %s", e)
 
-        # Kirim konfirmasi transaksi sukses
+        # Kirim konfirmasi transaksi sukses + lampirkan file produk secara privat (ephemeral)
+        discord_file_ephemeral = discord.File(str(file_obj), filename=file_obj.name)
         if dm_sent:
             await interaction.followup.send(
-                content=f"✅ **Transaksi Sukses!** File produk telah dikirimkan langsung ke **Direct Message (DM)** Anda.",
+                content="✅ **Transaksi Sukses!** File produk telah kami lampirkan di bawah ini dan salinannya juga telah dikirimkan ke **DM** Anda:",
+                embed=invoice_embed,
+                file=discord_file_ephemeral,
                 ephemeral=True
             )
         else:
-            # Fallback: Kirim file secara ephemeral di channel saat ini jika DM terkunci
-            discord_file_ephemeral = discord.File(str(file_obj), filename=file_obj.name)
             await interaction.followup.send(
-                content="⚠️ **DM Anda tertutup!** File produk Anda kami kirimkan secara privat di bawah ini:",
+                content="✅ **Transaksi Sukses!** (DM Anda tertutup). File produk kami lampirkan secara privat di bawah ini:",
                 embed=invoice_embed,
                 file=discord_file_ephemeral,
                 ephemeral=True
