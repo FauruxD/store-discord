@@ -53,6 +53,7 @@ class AdminCog(commands.Cog):
         embed.set_footer(text="Sistem Store Aman & Terpercaya • Powered by discord.py")
 
         # Pasang Persistent View
+        config.ORDER_CHANNEL_ID = interaction.channel_id
         view = MainDashboardView(self.bot.db)
         await interaction.channel.send(embed=embed, view=view)
         await interaction.response.send_message("✅ Panel dashboard toko berhasil dipasang di channel ini!", ephemeral=True)
@@ -681,8 +682,22 @@ class AdminCog(commands.Cog):
             f"✅ URL Saweria berhasil diperbarui ke: **{clean_url}**!\n\n"
             f"📌 **Langkah Konfigurasi Saweria:**\n"
             f"1. Buka dashboard Saweria > menu **Integrasi Webhook**.\n"
-            f"2. Masukkan Webhook URL: `http://<IP_VPS_ANDA>:{config.WEBHOOK_PORT}/saweria-webhook`\n"
+            f"2. Masukkan Webhook URL: `https://<DOMAIN_ANDA>/saweria-webhook`\n"
             f"3. Simpan. Bot akan otomatis menambah saldo ketika pembeli mencantumkan ID Discord mereka di pesan donasi!",
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="setup_order_channel",
+        description="[Admin] Konfigurasi channel tempat notifikasi deposit/order ditampilkan."
+    )
+    @app_commands.describe(channel="Channel teks untuk notifikasi order & deposit")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def setup_order_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        """Mengatur channel order/deposit."""
+        config.ORDER_CHANNEL_ID = channel.id
+        await interaction.response.send_message(
+            f"✅ Channel notifikasi order & deposit disetel ke {channel.mention} (`{channel.id}`)!",
             ephemeral=True
         )
 

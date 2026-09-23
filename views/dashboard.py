@@ -39,11 +39,36 @@ class DepositInstructionsView(ui.View):
             ),
             color=discord.Color.green()
         )
-        embed.set_footer(text="Saldo otomatis masuk dalam 5-15 detik setelah QRIS berhasil dibayar.")
+        embed.set_footer(text="Pesan ini akan otomatis hilang begitu saldo berhasil masuk.")
 
-        view = ui.View()
+        view = ui.View(timeout=600)
         view.add_item(ui.Button(label="Buka Halaman Saweria", url=saweria_url, emoji="🔗"))
+
+        close_btn = ui.Button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️")
+        async def close_callback(close_inter: discord.Interaction):
+            await close_inter.response.defer(ephemeral=True)
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
+            if hasattr(interaction.client, "active_saweria_sessions"):
+                interaction.client.active_saweria_sessions.pop(interaction.user.id, None)
+
+        close_btn.callback = close_callback
+        view.add_item(close_btn)
+
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+        # Simpan sesi aktif Saweria agar otomatis dihapus saat pembayaran sukses
+        if not hasattr(interaction.client, "active_saweria_sessions"):
+            interaction.client.active_saweria_sessions = {}
+
+        interaction.client.active_saweria_sessions[interaction.user.id] = {
+            "saweria_interaction": interaction,
+            "instruction_interaction": self.instruction_interaction,
+            "channel_id": interaction.channel_id,
+            "user_id": interaction.user.id
+        }
 
     @ui.button(label="Formulir Manual (Link/Teks)", style=discord.ButtonStyle.secondary, emoji="📝", row=0)
     async def open_modal_btn(self, interaction: discord.Interaction, button: ui.Button):

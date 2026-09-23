@@ -102,11 +102,35 @@ class WebhookCog(commands.Cog):
             new_balance = await self.bot.db.add_balance(user_id, amount)
             logger.info("Saldo Rp %d berhasil ditambahkan otomatis ke user %d via Saweria.", amount, user_id)
 
-            # Kirim notifikasi DM ke user
+            # 1. Hapus pesan instruksi QRIS Saweria dari layar user
+            session = getattr(self.bot, "active_saweria_sessions", {}).pop(user_id, None)
+            target_channel_id = None
+            if session:
+                target_channel_id = session.get("channel_id")
+                saweria_inter = session.get("saweria_interaction")
+                if saweria_inter:
+                    try:
+                        await saweria_inter.delete_original_response()
+                    except Exception as e:
+                        logger.debug("Gagal menghapus pesan saweria ephemeral: %s", e)
+
+                inst_inter = session.get("instruction_interaction")
+                if inst_inter:
+                    try:
+                        await inst_inter.delete_original_response()
+                    except Exception as e:
+                        logger.debug("Gagal menghapus instruction interaction: %s", e)
+
+            # Fallback channel jika tidak ada di session aktif
+            if not target_channel_id:
+                target_channel_id = getattr(config, "ORDER_CHANNEL_ID", None) or getattr(config, "TRANSACTION_LOG_CHANNEL_ID", None)
+
+            # 2. Kirim notifikasi DM ke user
+            user = None
             try:
                 user = await self.bot.fetch_user(user_id)
                 if user:
-                    embed = discord.Embed(
+                    embed_dm = discord.Embed(
                         title="⚡ Deposit Otomatis Berhasil (QRIS Saweria)!",
                         description=(
                             f"Halo **{user.name}**!\n"
@@ -116,13 +140,33 @@ class WebhookCog(commands.Cog):
                         ),
                         color=discord.Color.green()
                     )
-                    embed.set_footer(text="Automated Instant Deposit • Powered by Saweria")
-                    await user.send(embed=embed)
+                    embed_dm.set_footer(text="Automated Instant Deposit • Powered by Saweria")
+                    await user.send(embed=embed_dm)
             except Exception as dm_err:
                 logger.warning("Gagal mengirim DM konfirmasi deposit ke user %d: %s", user_id, dm_err)
 
-            # Kirim log ke channel log deposit jika dikonfigurasi
-            if config.DEPOSIT_LOG_CHANNEL_ID:
+            # 3. Kirim notifikasi ke Channel Order / Channel Toko
+            if target_channel_id:
+                ch_order = self.bot.get_channel(target_channel_id)
+                if ch_order:
+                    user_tag = f"<@{user_id}>"
+                    order_embed = discord.Embed(
+                        title="⚡ Deposit Otomatis Berhasil (QRIS Saweria)",
+                        description=(
+                            f"🎉 Top-up saldo oleh {user_tag} telah **berhasil diproses**!\n\n"
+                            f"💵 **Nominal:** Rp {amount:,}\n"
+                            f"💰 **Saldo Terbaru:** Rp {new_balance:,}\n"
+                            f"⚡ **Metode:** Saweria QRIS Instant"
+                        ),
+                        color=discord.Color.green()
+                    )
+                    if user and hasattr(user, "display_avatar") and user.display_avatar:
+                        order_embed.set_thumbnail(url=user.display_avatar.url)
+                    order_embed.set_footer(text="Automated Digital Store • Transaksi 24/7 Instan")
+                    await ch_order.send(content=f"🔔 {user_tag}", embed=order_embed)
+
+            # 4. Kirim log ke channel log deposit admin jika dikonfigurasi dan berbeda dengan channel order
+            if config.DEPOSIT_LOG_CHANNEL_ID and config.DEPOSIT_LOG_CHANNEL_ID != target_channel_id:
                 ch = self.bot.get_channel(config.DEPOSIT_LOG_CHANNEL_ID)
                 if ch:
                     log_embed = discord.Embed(
@@ -151,21 +195,23 @@ class WebhookCog(commands.Cog):
             "Saweria webhook masuk Rp %d dari '%s' tanpa Discord User ID! Pesan: '%s'",
             amount, donator_name, message
         )
-        if config.DEPOSIT_LOG_CHANNEL_ID:
-            ch = self.bot.get_channel(config.DEPOSIT_LOG_CHANNEL_ID)
+        target_ch_id = getattr(config, "ORDER_CHANNEL_ID", None) or config.DEPOSIT_LOG_CHANNEL_ID
+        if target_ch_id:
+            ch = self.bot.get_channel(target_ch_id)
             if ch:
-                alert_embed = discord.Embed(
-                    title="⚠️ Dana Saweria Masuk Tanpa Discord ID!",
+                fail_embed = discord.Embed(
+                    title="⚠️ Deposit Gagal Diproses Otomatis",
                     description=(
-                        f"Terdapat dana masuk sebesar **Rp {amount:,}** dari **{donator_name}**, "
-                        f"tetapi sistem tidak menemukan Discord User ID pada kolom pesan.\n\n"
-                        f"• **Pesan Donasi:** `{message}`\n"
-                        f"• **ID Transaksi:** `{payment_id}`\n\n"
-                        f"👉 *Admin dapat mencocokkan konfirmasi pembeli dan menambahkan saldo manual via `/add_balance`.*"
+                        f"Pembayaran sebesar **Rp {amount:,}** dari **{donator_name}** diterima, "
+                        f"tetapi **ID Discord tidak ditemukan** pada pesan donasi Saweria.\n\n"
+                        f"• **Pesan Donatur:** `{message or '-'}`\n"
+                        f"• **ID Transaksi:** `{payment_id or '-'}`\n\n"
+                        f"👉 **Bagi Pembeli:** Silakan hubungi admin dengan bukti transfer di atas agar saldo dapat ditambahkan manual via `/add_balance`."
                     ),
                     color=discord.Color.orange()
                 )
-                await ch.send(embed=alert_embed)
+                fail_embed.set_footer(text="Sistem Store • ID Discord Tidak Ditemukan")
+                await ch.send(embed=fail_embed)
 
         return web.json_response({
             "status": "received",

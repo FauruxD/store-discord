@@ -181,6 +181,29 @@ class AdminDepositApprovalView(ui.View):
         except Exception as e:
             logger.warning("Gagal mengirim DM notifikasi ke user %d: %s", self.user_id, str(e))
 
+        # 3. Kirim notifikasi ke Channel Order / Channel tempat tiket dibuat
+        target_ch_id = (session.get("channel_id") if session else None)
+        if not target_ch_id:
+            dep_row = await self.db.get_deposit_request(self.deposit_id)
+            if dep_row and dep_row.get("channel_id"):
+                target_ch_id = dep_row["channel_id"]
+        if not target_ch_id:
+            target_ch_id = getattr(config, "ORDER_CHANNEL_ID", None)
+
+        if target_ch_id:
+            order_ch = interaction.client.get_channel(target_ch_id)
+            if order_ch:
+                order_embed = discord.Embed(
+                    title="✅ Deposit Berhasil Disetujui!",
+                    description=(
+                        f"🎉 Deposit saldo oleh <@{self.user_id}> sebesar **Rp {self.amount:,}** "
+                        f"telah disetujui oleh {interaction.user.mention}."
+                    ),
+                    color=discord.Color.green()
+                )
+                order_embed.set_footer(text="Automated Digital Store • Saldo Telah Masuk")
+                await order_ch.send(content=f"🔔 <@{self.user_id}>", embed=order_embed)
+
     @ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌")
     async def reject_btn(self, interaction: discord.Interaction, button: ui.Button):
         # Validasi role admin jika di-set
@@ -243,4 +266,28 @@ class AdminDepositApprovalView(ui.View):
                 dm_embed.set_footer(text="Automated Digital Store System • Private Notification")
                 await target_user.send(embed=dm_embed)
         except Exception as e:
+            logger.warning("Gagal mengirim DM notifikasi ke user %d: %s", self.user_id, str(e))
+
+        # 3. Kirim notifikasi penolakan ke Channel Order / Channel tempat tiket dibuat
+        target_ch_id = (session.get("channel_id") if session else None)
+        if not target_ch_id:
+            dep_row = await self.db.get_deposit_request(self.deposit_id)
+            if dep_row and dep_row.get("channel_id"):
+                target_ch_id = dep_row["channel_id"]
+        if not target_ch_id:
+            target_ch_id = getattr(config, "ORDER_CHANNEL_ID", None)
+
+        if target_ch_id:
+            order_ch = interaction.client.get_channel(target_ch_id)
+            if order_ch:
+                order_embed = discord.Embed(
+                    title="❌ Deposit Ditolak (REJECTED)",
+                    description=(
+                        f"⚠️ Permintaan deposit saldo ID `{self.deposit_id}` oleh <@{self.user_id}> "
+                        f"sebesar **Rp {self.amount:,}** telah **ditolak** oleh admin {interaction.user.mention}."
+                    ),
+                    color=discord.Color.red()
+                )
+                order_embed.set_footer(text="Automated Digital Store • Deposit Ditolak")
+                await order_ch.send(content=f"⚠️ <@{self.user_id}>", embed=order_embed)
             logger.warning("Gagal mengirim DM penolakan ke user %d: %s", self.user_id, str(e))

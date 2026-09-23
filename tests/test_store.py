@@ -351,6 +351,9 @@ async def run_tests():
     assert health_data["status"] == "online"
     print("-> Health check endpoint responding 200 OK.")
 
+    import config
+    config.ORDER_CHANNEL_ID = 88888888
+
     # 2. Saweria notification with Discord User ID in message
     bal_before = await db.get_balance(test_user_id)
     saweria_payload = {
@@ -367,7 +370,8 @@ async def run_tests():
     bal_after = await db.get_balance(test_user_id)
     assert bal_after == bal_before + 25000
     assert len(mock_customer.dms_received) > 0
-    print(f"-> Webhook Saweria dengan Discord ID berhasil: Saldo bertambah Rp 25,000 (Total: Rp {bal_after:,})")
+    assert len(mock_channel.messages) > 0
+    print(f"-> Webhook Saweria berhasil: Saldo bertambah Rp 25,000, notifikasi terkirim ke DM & Channel Order!")
 
     # 3. Saweria notification with DEP ticket
     dep_saweria = await db.create_deposit_request(test_user_id, 15000, "saweria_auto")

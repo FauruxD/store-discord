@@ -24,6 +24,7 @@ CUSTOMER_ROLE_ID = int(os.getenv("CUSTOMER_ROLE_ID", 0)) if os.getenv("CUSTOMER_
 DEPOSIT_LOG_CHANNEL_ID = int(os.getenv("DEPOSIT_LOG_CHANNEL_ID", 0)) if os.getenv("DEPOSIT_LOG_CHANNEL_ID") else None
 TRANSACTION_LOG_CHANNEL_ID = int(os.getenv("TRANSACTION_LOG_CHANNEL_ID", 0)) if os.getenv("TRANSACTION_LOG_CHANNEL_ID") else None
 TESTIMONIAL_CHANNEL_ID = int(os.getenv("TESTIMONIAL_CHANNEL_ID", 0)) if os.getenv("TESTIMONIAL_CHANNEL_ID") else None
+ORDER_CHANNEL_ID = int(os.getenv("ORDER_CHANNEL_ID", 0)) if os.getenv("ORDER_CHANNEL_ID") else None
 
 # Pengaturan QRIS & Rekening
 QRIS_IMAGE_URL = os.getenv(
