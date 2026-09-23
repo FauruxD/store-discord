@@ -7,7 +7,7 @@ from discord.ext import commands
 
 import config
 from database import DatabaseManager
-from views import MainDashboardView
+from views import MainDashboardView, OwnerAdminPanelView
 
 # Konfigurasi Logging
 logging.basicConfig(
@@ -54,8 +54,9 @@ class DiscordStoreBot(commands.Bot):
         await self._seed_initial_products()
 
         # Registrasi PERSISTENT VIEW agar tombol dashboard tetap berfungsi setelah bot restart
-        logger.info("Mendaftarkan Persistent Dashboard View...")
+        logger.info("Mendaftarkan Persistent Dashboard & Owner Views...")
         self.add_view(MainDashboardView(self.db))
+        self.add_view(OwnerAdminPanelView(self.db))
 
         # Muat modul ekstensi (Cogs)
         cogs_list = ["cogs.admin", "cogs.store"]

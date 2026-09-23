@@ -208,6 +208,13 @@ class DatabaseManager:
             await db.commit()
             return cursor.rowcount > 0
 
+    async def update_price(self, product_id: str, new_price: int) -> bool:
+        """Memperbarui harga produk."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("UPDATE products SET price = ? WHERE product_id = ?", (new_price, product_id))
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def get_available_products(self) -> List[Dict[str, Any]]:
         """Mengambil seluruh daftar produk yang memiliki stok > 0."""
         async with aiosqlite.connect(self.db_path) as db:

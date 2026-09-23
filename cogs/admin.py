@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 import config
 from views.dashboard import MainDashboardView
+from views.admin_panel import OwnerAdminPanelView
 
 logger = logging.getLogger("StoreBot.Cogs.Admin")
 
@@ -237,6 +238,37 @@ class AdminCog(commands.Cog):
             )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="setup_owner_panel",
+        description="[Owner/Admin] Pasang panel khusus kontrol CRUD produk di channel ini."
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def setup_owner_panel(self, interaction: discord.Interaction):
+        """Memasang panel kontrol khusus Owner/Admin di channel khusus."""
+        embed = discord.Embed(
+            title="🛠️ OWNER & ADMIN CONTROL PANEL",
+            description=(
+                "Panel kontrol manajemen inventaris & produk digital store.\n"
+                "Semua perubahan di sini akan langsung berdampak ke katalog pembeli secara realtime.\n\n"
+                "**Fitur & Aksi CRUD:**\n"
+                "• 📋 **Daftar Produk (Read)** - Pantau semua produk, stok, dan kesiapan file\n"
+                "• ➕ **Tambah Produk (Create)** - Panduan & tambah produk via `/add_product`\n"
+                "• ✏️ **Edit / Restock (Update)** - Ubah harga atau tambah stok via menu dropdown\n"
+                "• 🗑️ **Hapus Produk (Delete)** - Hapus produk yang tidak lagi dijual"
+            ),
+            color=discord.Color.dark_grey()
+        )
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
+        embed.set_footer(text="Panel Khusus Owner • Hanya dapat diakses di channel ini oleh Staff")
+
+        view = OwnerAdminPanelView(self.bot.db, target_channel_id=interaction.channel_id)
+        await interaction.channel.send(embed=embed, view=view)
+        await interaction.response.send_message(
+            f"✅ Panel khusus Owner berhasil dipasang di channel {interaction.channel.mention}!",
+            ephemeral=True
+        )
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(AdminCog(bot))
