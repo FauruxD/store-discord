@@ -162,7 +162,15 @@ async def run_tests():
     assert prod_acc_after["stock"] == 3
     unsold_count = await db.get_unsold_accounts_count("test_acc")
     assert unsold_count == 3
-    print(f"-> Sisa stok akun setelah pembelian: {prod_acc_after['stock']} unit")
+
+    # Verifikasi detail akun tersisa dan statistik stok
+    stock_details = await db.get_account_stock_details("test_acc")
+    assert stock_details["unsold_count"] == 3
+    assert stock_details["sold_count"] == 2
+    assert stock_details["total_count"] == 5
+    assert len(stock_details["unsold_accounts"]) == 3
+    assert stock_details["unsold_accounts"][0] == "user3@mail.com:qwerty789"
+    print(f"-> Sisa stok akun setelah pembelian: {prod_acc_after['stock']} unit (Unsold: {stock_details['unsold_count']}, Sold: {stock_details['sold_count']})")
 
     # Coba beli Qty = 4 (Stok hanya 3, harus ditolak)
     fail_qty_success, fail_qty_msg, _ = await db.purchase_product(buyer_id, "test_acc", quantity=4)

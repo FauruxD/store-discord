@@ -252,6 +252,32 @@ class DatabaseManager:
             row = await cursor.fetchone()
             return row[0] if row else 0
 
+    async def get_account_stock_details(self, product_id: str) -> Dict[str, Any]:
+        """Mengambil rincian akun yang belum terjual dan statistik akun."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT account_data FROM product_accounts WHERE product_id = ? AND is_sold = 0 ORDER BY account_id ASC",
+                (product_id,)
+            )
+            rows_unsold = await cursor.fetchall()
+            unsold_lines = [r["account_data"] for r in rows_unsold]
+
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM product_accounts WHERE product_id = ? AND is_sold = 1",
+                (product_id,)
+            )
+            row_sold = await cursor.fetchone()
+            sold_count = row_sold[0] if row_sold else 0
+
+            return {
+                "product_id": product_id,
+                "unsold_count": len(unsold_lines),
+                "sold_count": sold_count,
+                "total_count": len(unsold_lines) + sold_count,
+                "unsold_accounts": unsold_lines
+            }
+
     async def delete_product(self, product_id: str) -> bool:
         """Menghapus produk dari database."""
         async with aiosqlite.connect(self.db_path) as db:

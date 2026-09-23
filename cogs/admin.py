@@ -267,6 +267,68 @@ class AdminCog(commands.Cog):
             )
 
     @app_commands.command(
+        name="check_stock",
+        description="[Admin] Cek sisa stok produk atau unduh/lihat daftar akun yang belum terjual."
+    )
+    @app_commands.describe(product_id="ID produk yang ingin dicek stoknya")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def check_stock(self, interaction: discord.Interaction, product_id: str):
+        """Memeriksa sisa stok dan mengekspor akun yang belum terjual."""
+        clean_id = product_id.lower().strip()
+        product = await self.bot.db.get_product(clean_id)
+        if not product:
+            return await interaction.response.send_message(
+                f"❌ Produk dengan ID `{product_id}` tidak ditemukan di database.",
+                ephemeral=True
+            )
+
+        prod_type = product.get("product_type", "FILE")
+        if prod_type == "ACCOUNT":
+            details = await self.bot.db.get_account_stock_details(clean_id)
+            unsold_count = details["unsold_count"]
+            sold_count = details["sold_count"]
+            total_count = details["total_count"]
+            unsold_accounts = details["unsold_accounts"]
+
+            embed = discord.Embed(
+                title=f"📦 Rincian Stok Akun: {product['name']}",
+                description=f"**Product ID:** `{clean_id}`\n**Harga Satuan:** Rp {product['price']:,}",
+                color=discord.Color.green() if unsold_count > 0 else discord.Color.red()
+            )
+            embed.add_field(name="🟢 Sisa Stok Tersedia", value=f"**{unsold_count} akun**", inline=True)
+            embed.add_field(name="🔴 Sudah Terjual", value=f"**{sold_count} akun**", inline=True)
+            embed.add_field(name="📊 Total Pernah Diinput", value=f"**{total_count} akun**", inline=True)
+
+            if unsold_count > 0:
+                import io
+                content = "\n".join(unsold_accounts)
+                file_data = io.BytesIO(content.encode("utf-8"))
+                discord_file = discord.File(file_data, filename=f"stok_tersisa_{clean_id}.txt")
+
+                preview_lines = unsold_accounts[:5]
+                preview_text = "\n".join(preview_lines)
+                if unsold_count > 5:
+                    preview_text += f"\n... dan {unsold_count - 5} akun lainnya (lihat file terlampir)"
+                embed.add_field(name="👁️ Pratinjau Akun Tersisa", value=f"```text\n{preview_text}\n```", inline=False)
+                embed.set_footer(text="File daftar akun tersisa terlampir di bawah (hanya Anda yang dapat melihat ini).")
+
+                await interaction.response.send_message(embed=embed, file=discord_file, ephemeral=True)
+            else:
+                embed.set_footer(text="Stok akun sedang habis. Silakan gunakan /restock_accounts untuk mengisi ulang.")
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            file_exists = Path(product["file_path"]).exists()
+            file_status = "🟢 Ready di Server" if file_exists else "🔴 File Tidak Ditemukan!"
+            embed = discord.Embed(
+                title=f"📦 Rincian Stok Produk: {product['name']}",
+                description=f"**Product ID:** `{clean_id}`\n**Tipe:** 📁 File Digital\n**Harga Satuan:** Rp {product['price']:,}",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Sisa Stok", value=f"**{product['stock']} unit**", inline=True)
+            embed.add_field(name="File Fisik", value=f"`{Path(product['file_path']).name}` ({file_status})", inline=False)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
         name="delete_product",
         description="[Admin] Hapus produk dari katalog toko."
     )

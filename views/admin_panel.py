@@ -146,6 +146,47 @@ class ProductEditActionView(ui.View):
             RestockAccountModal(self.db, self.product["product_id"], self.product["name"])
         )
 
+    @ui.button(label="Lihat Akun Sisa", style=discord.ButtonStyle.secondary, emoji="👁️")
+    async def view_acc_stock_btn(self, interaction: discord.Interaction, button: ui.Button):
+        prod_type = self.product.get("product_type", "FILE")
+        if prod_type != "ACCOUNT":
+            return await interaction.response.send_message(
+                f"ℹ️ Produk ini bertipe File Digital. Sisa stok: **{self.product['stock']} unit**.",
+                ephemeral=True
+            )
+        details = await self.db.get_account_stock_details(self.product["product_id"])
+        unsold_count = details["unsold_count"]
+        sold_count = details["sold_count"]
+        total_count = details["total_count"]
+        unsold_accounts = details["unsold_accounts"]
+
+        embed = discord.Embed(
+            title=f"📦 Sisa Stok Akun: {self.product['name']}",
+            description=f"**ID Produk:** `{self.product['product_id']}`",
+            color=discord.Color.teal()
+        )
+        embed.add_field(name="🟢 Sisa Stok Tersedia", value=f"**{unsold_count} unit**", inline=True)
+        embed.add_field(name="🔴 Sudah Terjual", value=f"**{sold_count} unit**", inline=True)
+        embed.add_field(name="📊 Total Pernah Diinput", value=f"**{total_count} unit**", inline=True)
+
+        if unsold_count > 0:
+            import io
+            content = "\n".join(unsold_accounts)
+            file_data = io.BytesIO(content.encode("utf-8"))
+            discord_file = discord.File(file_data, filename=f"stok_tersisa_{self.product['product_id']}.txt")
+
+            preview_lines = unsold_accounts[:5]
+            preview_text = "\n".join(preview_lines)
+            if unsold_count > 5:
+                preview_text += f"\n... dan {unsold_count - 5} akun lainnya (unduh file terlampir)"
+            embed.add_field(name="👁️ Pratinjau 5 Akun Teratas", value=f"```text\n{preview_text}\n```", inline=False)
+            embed.set_footer(text="File daftar akun tersisa terlampir di bawah (hanya Anda yang dapat melihat ini).")
+            await interaction.response.send_message(embed=embed, file=discord_file, ephemeral=True)
+        else:
+            embed.description += "\n\n⚠️ Stok akun ini sedang habis (0 unit)."
+            embed.set_footer(text="Gunakan tombol Input Akun atau command /restock_accounts untuk mengisi stok.")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
     @ui.button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️")
     async def close_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)

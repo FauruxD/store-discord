@@ -19,3 +19,7 @@ ENV/
 # OS specific
 .DS_Store
 Thumbs.db
+
+# Generated buyer order files
+assets/orders/*
+!assets/orders/.gitkeep
