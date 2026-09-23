@@ -102,17 +102,25 @@ class WebhookCog(commands.Cog):
             new_balance = await self.bot.db.add_balance(user_id, amount)
             logger.info("Saldo Rp %d berhasil ditambahkan otomatis ke user %d via Saweria.", amount, user_id)
 
-            # 1. Hapus pesan instruksi QRIS Saweria dari layar user
+            # 1. Ubah pesan panduan QRIS Saweria menjadi Private Message "Deposit Berhasil" di layar user
             session = getattr(self.bot, "active_saweria_sessions", {}).pop(user_id, None)
-            target_channel_id = None
             if session:
-                target_channel_id = session.get("channel_id")
                 saweria_inter = session.get("saweria_interaction")
                 if saweria_inter:
                     try:
-                        await saweria_inter.delete_original_response()
+                        success_ephemeral_embed = discord.Embed(
+                            title="✅ Deposit Berhasil Masuk (QRIS Saweria)!",
+                            description=(
+                                f"🎉 Pembayaran via **Saweria QRIS** sebesar **Rp {amount:,}** telah berhasil kami terima!\n\n"
+                                f"💰 **Saldo Terbaru Anda:** **Rp {new_balance:,}**\n\n"
+                                f"Saldo Anda sudah bertambah. Silakan tekan tombol **'Beli Produk'** di dashboard toko untuk mulai berbelanja!"
+                            ),
+                            color=discord.Color.green()
+                        )
+                        success_ephemeral_embed.set_footer(text="100% Otomatis • Hanya Anda yang dapat melihat pesan ini")
+                        await saweria_inter.edit_original_response(embed=success_ephemeral_embed, view=None)
                     except Exception as e:
-                        logger.debug("Gagal menghapus pesan saweria ephemeral: %s", e)
+                        logger.debug("Gagal mengupdate pesan saweria ephemeral: %s", e)
 
                 inst_inter = session.get("instruction_interaction")
                 if inst_inter:
@@ -121,11 +129,7 @@ class WebhookCog(commands.Cog):
                     except Exception as e:
                         logger.debug("Gagal menghapus instruction interaction: %s", e)
 
-            # Fallback channel jika tidak ada di session aktif
-            if not target_channel_id:
-                target_channel_id = getattr(config, "ORDER_CHANNEL_ID", None) or getattr(config, "TRANSACTION_LOG_CHANNEL_ID", None)
-
-            # 2. Kirim notifikasi DM ke user
+            # 2. Kirim notifikasi privat ke DM user
             user = None
             try:
                 user = await self.bot.fetch_user(user_id)
@@ -145,28 +149,8 @@ class WebhookCog(commands.Cog):
             except Exception as dm_err:
                 logger.warning("Gagal mengirim DM konfirmasi deposit ke user %d: %s", user_id, dm_err)
 
-            # 3. Kirim notifikasi ke Channel Order / Channel Toko
-            if target_channel_id:
-                ch_order = self.bot.get_channel(target_channel_id)
-                if ch_order:
-                    user_tag = f"<@{user_id}>"
-                    order_embed = discord.Embed(
-                        title="⚡ Deposit Otomatis Berhasil (QRIS Saweria)",
-                        description=(
-                            f"🎉 Top-up saldo oleh {user_tag} telah **berhasil diproses**!\n\n"
-                            f"💵 **Nominal:** Rp {amount:,}\n"
-                            f"💰 **Saldo Terbaru:** Rp {new_balance:,}\n"
-                            f"⚡ **Metode:** Saweria QRIS Instant"
-                        ),
-                        color=discord.Color.green()
-                    )
-                    if user and hasattr(user, "display_avatar") and user.display_avatar:
-                        order_embed.set_thumbnail(url=user.display_avatar.url)
-                    order_embed.set_footer(text="Automated Digital Store • Transaksi 24/7 Instan")
-                    await ch_order.send(content=f"🔔 {user_tag}", embed=order_embed)
-
-            # 4. Kirim log ke channel log deposit admin jika dikonfigurasi dan berbeda dengan channel order
-            if config.DEPOSIT_LOG_CHANNEL_ID and config.DEPOSIT_LOG_CHANNEL_ID != target_channel_id:
+            # 3. Kirim log ke channel log deposit admin jika dikonfigurasi
+            if config.DEPOSIT_LOG_CHANNEL_ID:
                 ch = self.bot.get_channel(config.DEPOSIT_LOG_CHANNEL_ID)
                 if ch:
                     log_embed = discord.Embed(

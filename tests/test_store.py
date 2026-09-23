@@ -352,7 +352,24 @@ async def run_tests():
     print("-> Health check endpoint responding 200 OK.")
 
     import config
-    config.ORDER_CHANNEL_ID = 88888888
+    config.DEPOSIT_LOG_CHANNEL_ID = 88888888
+
+    # Mock active saweria session (Private Ephemeral Message di layar user)
+    class MockInteraction:
+        def __init__(self):
+            self.edited_with = None
+        async def edit_original_response(self, *args, **kwargs):
+            self.edited_with = (args, kwargs)
+
+    mock_saweria_inter = MockInteraction()
+    mock_bot.active_saweria_sessions = {
+        test_user_id: {
+            "saweria_interaction": mock_saweria_inter,
+            "instruction_interaction": None,
+            "channel_id": 88888888,
+            "user_id": test_user_id
+        }
+    }
 
     # 2. Saweria notification with Discord User ID in message
     bal_before = await db.get_balance(test_user_id)
@@ -370,8 +387,8 @@ async def run_tests():
     bal_after = await db.get_balance(test_user_id)
     assert bal_after == bal_before + 25000
     assert len(mock_customer.dms_received) > 0
-    assert len(mock_channel.messages) > 0
-    print(f"-> Webhook Saweria berhasil: Saldo bertambah Rp 25,000, notifikasi terkirim ke DM & Channel Order!")
+    assert mock_saweria_inter.edited_with is not None
+    print(f"-> Webhook Saweria berhasil: Pesan panduan otomatis diubah jadi Private Message saldo masuk di layar user & DM!")
 
     # 3. Saweria notification with DEP ticket
     dep_saweria = await db.create_deposit_request(test_user_id, 15000, "saweria_auto")
