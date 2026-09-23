@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS deposits (
     user_id INTEGER NOT NULL,
     amount INTEGER NOT NULL CHECK(amount > 0),
     proof_url TEXT,
+    channel_id INTEGER,
     status TEXT NOT NULL DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED
     reviewed_by INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

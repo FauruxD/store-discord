@@ -13,13 +13,22 @@ class DepositInstructionsView(ui.View):
     Sub-view ephemeral yang muncul saat user menekan tombol 'Deposit Saldo'.
     Menyediakan tombol untuk memunculkan Modal Formulir Konfirmasi Deposit.
     """
-    def __init__(self, db_manager):
+    def __init__(self, db_manager, instruction_interaction: discord.Interaction):
         super().__init__(timeout=180)
         self.db = db_manager
+        self.instruction_interaction = instruction_interaction
 
     @ui.button(label="Isi Formulir Konfirmasi Deposit", style=discord.ButtonStyle.primary, emoji="📝")
     async def open_modal_btn(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_modal(DepositModal(self.db))
+        await interaction.response.send_modal(DepositModal(self.db, instruction_interaction=self.instruction_interaction))
+
+    @ui.button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️")
+    async def close_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self.instruction_interaction.delete_original_response()
+        except Exception:
+            pass
 
 
 class MainDashboardView(ui.View):
@@ -81,7 +90,7 @@ class MainDashboardView(ui.View):
             embed.set_image(url=config.QRIS_IMAGE_URL)
         embed.set_footer(text="Verifikasi manual oleh admin biasanya memakan waktu 1-10 menit.")
 
-        view = DepositInstructionsView(self.db)
+        view = DepositInstructionsView(self.db, interaction)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @ui.button(

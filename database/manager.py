@@ -26,6 +26,10 @@ class DatabaseManager:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA foreign_keys = ON;")
             await db.executescript(schema_sql)
+            try:
+                await db.execute("ALTER TABLE deposits ADD COLUMN channel_id INTEGER;")
+            except Exception:
+                pass
             await db.commit()
             logger.info("Database berhasil diinisialisasi pada: %s", self.db_path)
 
@@ -85,7 +89,9 @@ class DatabaseManager:
     # SISTEM DEPOSIT / TOP-UP
     # =========================================================================
 
-    async def create_deposit_request(self, user_id: int, amount: int, proof_url: str = "") -> str:
+    async def create_deposit_request(
+        self, user_id: int, amount: int, proof_url: str = "", channel_id: Optional[int] = None
+    ) -> str:
         """Membuat tiket permintaan top-up baru."""
         deposit_id = f"DEP-{uuid.uuid4().hex[:8].upper()}"
         await self.get_or_create_user(user_id)
@@ -93,10 +99,10 @@ class DatabaseManager:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                INSERT INTO deposits (deposit_id, user_id, amount, proof_url, status)
-                VALUES (?, ?, ?, ?, 'PENDING')
+                INSERT INTO deposits (deposit_id, user_id, amount, proof_url, channel_id, status)
+                VALUES (?, ?, ?, ?, ?, 'PENDING')
                 """,
-                (deposit_id, user_id, amount, proof_url)
+                (deposit_id, user_id, amount, proof_url, channel_id)
             )
             await db.commit()
 

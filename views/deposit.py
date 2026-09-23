@@ -26,9 +26,10 @@ class DepositModal(ui.Modal, title="Konfirmasi Pembayaran Deposit"):
         max_length=250
     )
 
-    def __init__(self, db_manager):
+    def __init__(self, db_manager, instruction_interaction: Optional[discord.Interaction] = None):
         super().__init__()
         self.db = db_manager
+        self.instruction_interaction = instruction_interaction
 
     async def on_submit(self, interaction: discord.Interaction):
         # Validasi nominal angka
@@ -50,7 +51,8 @@ class DepositModal(ui.Modal, title="Konfirmasi Pembayaran Deposit"):
         deposit_id = await self.db.create_deposit_request(
             user_id=interaction.user.id,
             amount=amount_val,
-            proof_url=self.proof_info.value.strip()
+            proof_url=self.proof_info.value.strip(),
+            channel_id=interaction.channel_id
         )
 
         # Respon ephemeral ke user
@@ -66,6 +68,18 @@ class DepositModal(ui.Modal, title="Konfirmasi Pembayaran Deposit"):
         embed_user.add_field(name="Status", value="⏳ Menunggu Verifikasi", inline=True)
         embed_user.set_footer(text="Saldo akan masuk otomatis setelah disetujui admin.")
         await interaction.response.send_message(embed=embed_user, ephemeral=True)
+
+        # Simpan sesi interaksi di memory bot agar pesan instruksi & tiket bisa langsung dihapus saat admin approve/reject
+        if not hasattr(interaction.client, "active_deposit_sessions"):
+            interaction.client.active_deposit_sessions = {}
+
+        interaction.client.active_deposit_sessions[deposit_id] = {
+            "instruction_interaction": self.instruction_interaction,
+            "ticket_interaction": interaction,
+            "channel_id": interaction.channel_id,
+            "user_id": interaction.user.id,
+            "amount": amount_val
+        }
 
         # Kirim notifikasi embed ke channel admin log
         if config.DEPOSIT_LOG_CHANNEL_ID:
@@ -130,21 +144,62 @@ class AdminDepositApprovalView(ui.View):
 
         await interaction.response.edit_message(embed=embed, view=self)
 
-        # Kirim notifikasi DM ke user
+        # 1. Hapus pesan formulir & tiket deposit dari layar user
+        session = getattr(interaction.client, "active_deposit_sessions", {}).pop(self.deposit_id, None)
+        if session:
+            inst_inter = session.get("instruction_interaction")
+            if inst_inter:
+                try:
+                    await inst_inter.delete_original_response()
+                except Exception as e:
+                    logger.debug("Gagal menghapus instruction message: %s", e)
+
+            ticket_inter = session.get("ticket_interaction")
+            if ticket_inter:
+                try:
+                    await ticket_inter.delete_original_response()
+                except Exception as e:
+                    logger.debug("Gagal menghapus ticket message: %s", e)
+
+        # 2. Kirim pesan notifikasi Approved ke channel store tempat user melakukan deposit
+        target_channel_id = session.get("channel_id") if session else (data.get("channel_id") if data else None)
+        target_channel = interaction.client.get_channel(target_channel_id) if target_channel_id else None
+
+        target_user = None
         try:
             target_user = await interaction.client.fetch_user(self.user_id)
-            if target_user:
+        except Exception:
+            pass
+
+        if target_channel and target_user:
+            embed_notif = discord.Embed(
+                title="✅ Deposit Saldo Disetujui (APPROVED)",
+                description=(
+                    f"Halo {target_user.mention}, permintaan deposit saldo Anda sebesar **Rp {self.amount:,}** telah **DISETUJUI**!\n"
+                    f"Saldo telah berhasil masuk ke akun Anda. Selamat berbelanja!"
+                ),
+                color=discord.Color.green()
+            )
+            embed_notif.set_footer(text=f"Deposit ID: {self.deposit_id} • Diproses oleh {interaction.user.display_name}")
+            try:
+                await target_channel.send(content=target_user.mention, embed=embed_notif)
+            except Exception as e:
+                logger.error("Gagal mengirim notifikasi channel: %s", e)
+
+        # 3. Kirim notifikasi DM ke user
+        if target_user:
+            try:
                 dm_embed = discord.Embed(
                     title="🎉 Deposit Anda Telah Disetujui!",
                     description=(
                         f"Deposit ID `{self.deposit_id}` sebesar **Rp {self.amount:,}** telah berhasil ditambahkan ke saldo akun Anda!\n"
-                        f"Silakan gunakan tombol **Cek Balance** atau **Buy Product** di toko."
+                        f"Silakan gunakan tombol **Cek Balance** atau **Beli Produk** di toko."
                     ),
                     color=discord.Color.green()
                 )
                 await target_user.send(embed=dm_embed)
-        except Exception as e:
-            logger.warning("Gagal mengirim DM notifikasi ke user %d: %s", self.user_id, str(e))
+            except Exception as e:
+                logger.warning("Gagal mengirim DM notifikasi ke user %d: %s", self.user_id, str(e))
 
     @ui.button(label="Reject", style=discord.ButtonStyle.danger, emoji="❌")
     async def reject_btn(self, interaction: discord.Interaction, button: ui.Button):
@@ -175,10 +230,51 @@ class AdminDepositApprovalView(ui.View):
 
         await interaction.response.edit_message(embed=embed, view=self)
 
-        # Beritahu user via DM
+        # 1. Hapus pesan formulir & tiket deposit dari layar user
+        session = getattr(interaction.client, "active_deposit_sessions", {}).pop(self.deposit_id, None)
+        if session:
+            inst_inter = session.get("instruction_interaction")
+            if inst_inter:
+                try:
+                    await inst_inter.delete_original_response()
+                except Exception as e:
+                    logger.debug("Gagal menghapus instruction message: %s", e)
+
+            ticket_inter = session.get("ticket_interaction")
+            if ticket_inter:
+                try:
+                    await ticket_inter.delete_original_response()
+                except Exception as e:
+                    logger.debug("Gagal menghapus ticket message: %s", e)
+
+        # 2. Kirim notifikasi pesan Rejected ke channel store tempat user melakukan deposit
+        target_channel_id = session.get("channel_id") if session else (data.get("channel_id") if data else None)
+        target_channel = interaction.client.get_channel(target_channel_id) if target_channel_id else None
+
+        target_user = None
         try:
             target_user = await interaction.client.fetch_user(self.user_id)
-            if target_user:
+        except Exception:
+            pass
+
+        if target_channel and target_user:
+            embed_notif = discord.Embed(
+                title="❌ Deposit Saldo Ditolak (REJECTED)",
+                description=(
+                    f"Halo {target_user.mention}, permintaan deposit saldo Anda sebesar **Rp {self.amount:,}** telah **DITOLAK** oleh admin.\n"
+                    f"Pastikan bukti transfer valid atau silakan hubungi staff admin jika butuh bantuan."
+                ),
+                color=discord.Color.red()
+            )
+            embed_notif.set_footer(text=f"Deposit ID: {self.deposit_id} • Diproses oleh {interaction.user.display_name}")
+            try:
+                await target_channel.send(content=target_user.mention, embed=embed_notif)
+            except Exception as e:
+                logger.error("Gagal mengirim notifikasi channel: %s", e)
+
+        # 3. Beritahu user via DM
+        if target_user:
+            try:
                 dm_embed = discord.Embed(
                     title="⚠️ Deposit Anda Ditolak",
                     description=(
@@ -188,5 +284,5 @@ class AdminDepositApprovalView(ui.View):
                     color=discord.Color.red()
                 )
                 await target_user.send(embed=dm_embed)
-        except Exception as e:
-            logger.warning("Gagal mengirim DM penolakan ke user %d: %s", self.user_id, str(e))
+            except Exception as e:
+                logger.warning("Gagal mengirim DM penolakan ke user %d: %s", self.user_id, str(e))

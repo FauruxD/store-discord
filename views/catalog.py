@@ -62,7 +62,7 @@ class ProductDropdown(ui.Select):
 
         # Tampilkan embed detail beserta tombol konfirmasi pembelian
         view = ConfirmPurchaseView(self.db, product)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class ProductSelectView(ui.View):
@@ -140,7 +140,13 @@ class ConfirmPurchaseView(ui.View):
         except Exception as e:
             logger.error("Gagal mengirim DM produk ke %d: %s", user_id, str(e))
 
-        # Jika DM berhasil, kirim konfirmasi di server
+        # Hapus message konfirmasi pembelian agar otomatis hilang dari layar pembeli
+        try:
+            await interaction.delete_original_response()
+        except Exception as e:
+            logger.debug("Gagal menghapus pesan konfirmasi pembelian: %s", e)
+
+        # Kirim konfirmasi transaksi sukses
         if dm_sent:
             await interaction.followup.send(
                 content=f"✅ **Transaksi Sukses!** File produk telah dikirimkan langsung ke **Direct Message (DM)** Anda.",
@@ -172,10 +178,8 @@ class ConfirmPurchaseView(ui.View):
 
     @ui.button(label="Batal", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_btn(self, interaction: discord.Interaction, button: ui.Button):
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(
-            content="Transaksi telah dibatalkan.",
-            embed=None,
-            view=None
-        )
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.delete_original_response()
+        except Exception:
+            pass
