@@ -380,10 +380,10 @@ async def run_tests():
         }
     }
 
-    # 2. Saweria notification with Discord User ID in message
+    # 2. Saweria notification dengan fee QRIS (amount_raw: 1008 -> dinormalisasi jadi 1000)
     bal_before = await db.get_balance(test_user_id)
     saweria_payload = {
-        "amount_raw": 25000,
+        "amount_raw": 1008,
         "donator_name": "Budi Santoso",
         "message": f"Topup saldo store bot id {test_user_id} makasih min",
         "id": "saweria-tx-12345"
@@ -392,12 +392,12 @@ async def run_tests():
     assert resp.status == 200
     res_json = await resp.json()
     assert res_json["status"] == "success"
-    assert res_json["amount"] == 25000
+    assert res_json["amount"] == 1000, f"Harus dinormalisasi jadi 1000, didapat {res_json['amount']}"
     bal_after = await db.get_balance(test_user_id)
-    assert bal_after == bal_before + 25000
+    assert bal_after == bal_before + 1000
     assert len(mock_customer.dms_received) > 0
     assert mock_saweria_inter.edited_with is not None
-    print(f"-> Webhook Saweria berhasil: Pesan panduan otomatis diubah jadi Private Message saldo masuk di layar user & DM!")
+    print(f"-> Webhook Saweria berhasil: Rp 1,008 dinormalisasi tepat jadi Rp 1,000 saldo pembeli!")
 
     # 3. Saweria notification with DEP ticket
     dep_saweria = await db.create_deposit_request(test_user_id, 15000, "saweria_auto")

@@ -49,6 +49,33 @@ class WebhookCog(commands.Cog):
             "bot_user": str(self.bot.user) if self.bot.user else "Starting"
         })
 
+    def normalize_saweria_amount(self, raw_amount: int) -> int:
+        """
+        Menghilangkan fee QRIS Saweria (0.7% - 0.8% atau pembulatan unik)
+        agar saldo yang masuk ke user tepat berupa angka bulat (contoh: 1008 -> 1000, 10070 -> 10000).
+        """
+        if raw_amount <= 0:
+            return 0
+
+        # Cek jika dibagi faktor fee QRIS (1.007 atau 1.008) menghasilkan angka bulat
+        for factor in (1.007, 1.008, 1.0075):
+            base = round(raw_amount / factor)
+            if 0 < (raw_amount - base) <= max(10, round(raw_amount * 0.015)):
+                if base % 100 == 0 or base % 500 == 0 or base % 1000 == 0:
+                    return base
+
+        # Cek selisih fee terhadap kelipatan 1000 terdekat
+        base_1000 = (raw_amount // 1000) * 1000
+        if base_1000 > 0 and 0 < (raw_amount - base_1000) <= max(15, round(base_1000 * 0.01)):
+            return base_1000
+
+        # Cek selisih fee terhadap kelipatan 500 terdekat
+        base_500 = (raw_amount // 500) * 500
+        if base_500 > 0 and 0 < (raw_amount - base_500) <= max(15, round(base_500 * 0.01)):
+            return base_500
+
+        return raw_amount
+
     async def handle_saweria(self, request: web.Request):
         """Handler untuk request POST dari Webhook Saweria."""
         try:
@@ -60,7 +87,8 @@ class WebhookCog(commands.Cog):
         logger.info("Menerima notifikasi Saweria: %s", data)
 
         # Ekstrak data Saweria
-        amount = int(data.get("amount_raw") or data.get("amount") or 0)
+        raw_amount = int(data.get("amount_raw") or data.get("amount") or 0)
+        amount = self.normalize_saweria_amount(raw_amount)
         donator_name = str(data.get("donator_name") or data.get("donator") or "Anonim").strip()
         message = str(data.get("message") or "").strip()
         payment_id = str(data.get("id") or "")
@@ -157,8 +185,10 @@ class WebhookCog(commands.Cog):
                         title="⚡ Deposit Otomatis Sukses (Saweria QRIS)",
                         color=discord.Color.green()
                     )
-                    log_embed.add_field(name="Pelanggan", value=f"<@{user_id}> (`{user_id}`)", inline=True)
-                    log_embed.add_field(name="Nominal Masuk", value=f"**Rp {amount:,}**", inline=True)
+                    nom_display = f"**Rp {amount:,}**"
+                    if raw_amount != amount:
+                        nom_display += f" *(Dari Saweria: Rp {raw_amount:,})*"
+                    log_embed.add_field(name="Nominal Masuk", value=nom_display, inline=True)
                     log_embed.add_field(name="Saldo Baru", value=f"Rp {new_balance:,}", inline=True)
                     log_embed.add_field(name="Nama Donatur", value=donator_name, inline=True)
                     log_embed.add_field(name="Pesan", value=message or "-", inline=False)
