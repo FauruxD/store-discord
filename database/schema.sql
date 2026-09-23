@@ -56,3 +56,40 @@ CREATE TABLE IF NOT EXISTS product_accounts (
     sold_at TIMESTAMP,
     FOREIGN KEY(product_id) REFERENCES products(product_id) ON DELETE CASCADE
 );
+
+-- Tabel Voucher / Kode Promo
+CREATE TABLE IF NOT EXISTS vouchers (
+    code TEXT PRIMARY KEY,
+    discount_type TEXT NOT NULL CHECK(discount_type IN ('PERCENT', 'FLAT')), -- PERCENT (1-100) atau FLAT (Rupiah)
+    discount_value INTEGER NOT NULL CHECK(discount_value > 0),
+    min_spend INTEGER NOT NULL DEFAULT 0 CHECK(min_spend >= 0),
+    max_uses INTEGER NOT NULL DEFAULT 0 CHECK(max_uses >= 0), -- 0 = Unlimited
+    current_uses INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabel Riwayat Penggunaan Voucher
+CREATE TABLE IF NOT EXISTS voucher_usages (
+    usage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    order_id TEXT NOT NULL,
+    discount_applied INTEGER NOT NULL,
+    used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(code) REFERENCES vouchers(code) ON DELETE CASCADE
+);
+
+-- Tabel Ulasan / Testimoni Pelanggan
+CREATE TABLE IF NOT EXISTS reviews (
+    review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    product_id TEXT NOT NULL,
+    rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+    comment TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(user_id),
+    FOREIGN KEY(product_id) REFERENCES products(product_id)
+);
+

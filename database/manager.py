@@ -42,6 +42,14 @@ class DatabaseManager:
                 await db.execute("ALTER TABLE orders ADD COLUMN delivered_data TEXT;")
             except Exception:
                 pass
+            try:
+                await db.execute("ALTER TABLE orders ADD COLUMN voucher_code TEXT;")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE orders ADD COLUMN discount_amount INTEGER NOT NULL DEFAULT 0;")
+            except Exception:
+                pass
             await db.commit()
             logger.info("Database berhasil diinisialisasi pada: %s", self.db_path)
 
@@ -424,23 +432,187 @@ class DatabaseManager:
             return dict(row) if row else None
 
     # =========================================================================
+    # VOUCHER / KODE PROMO
+    # =========================================================================
+
+    async def create_voucher(
+        self,
+        code: str,
+        discount_type: str,
+        discount_value: int,
+        min_spend: int = 0,
+        max_uses: int = 0
+    ) -> Tuple[bool, str]:
+        """Membuat kode voucher promo baru."""
+        clean_code = code.upper().strip()
+        disc_type = discount_type.upper().strip()
+
+        if disc_type not in ("PERCENT", "FLAT"):
+            return False, "Tipe diskon harus 'PERCENT' (persen) atau 'FLAT' (rupiah)."
+
+        if disc_type == "PERCENT" and not (1 <= discount_value <= 100):
+            return False, "Diskon persen harus berada di antara 1% hingga 100%."
+
+        if disc_type == "FLAT" and discount_value <= 0:
+            return False, "Diskon flat harus lebih besar dari Rp 0."
+
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT code FROM vouchers WHERE code = ?", (clean_code,))
+            if await cursor.fetchone():
+                return False, f"Voucher dengan kode `{clean_code}` sudah ada!"
+
+            await db.execute(
+                """
+                INSERT INTO vouchers (code, discount_type, discount_value, min_spend, max_uses, current_uses, is_active)
+                VALUES (?, ?, ?, ?, ?, 0, 1)
+                """,
+                (clean_code, disc_type, discount_value, max(0, min_spend), max(0, max_uses))
+            )
+            await db.commit()
+            return True, f"Voucher `{clean_code}` berhasil dibuat!"
+
+    async def get_voucher(self, code: str) -> Optional[Dict[str, Any]]:
+        """Mengambil data voucher berdasarkan kode."""
+        clean_code = code.upper().strip()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM vouchers WHERE code = ?", (clean_code,))
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_all_vouchers(self) -> List[Dict[str, Any]]:
+        """Mengambil seluruh daftar voucher."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM vouchers ORDER BY created_at DESC")
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    async def delete_voucher(self, code: str) -> bool:
+        """Menghapus voucher dari database."""
+        clean_code = code.upper().strip()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("DELETE FROM vouchers WHERE code = ?", (clean_code,))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def validate_voucher(
+        self, code: str, user_id: int, total_amount: int
+    ) -> Tuple[bool, str, int, Optional[Dict[str, Any]]]:
+        """
+        Memvalidasi keabsahan voucher untuk user dan total belanja tertentu.
+        Mengembalikan (is_valid, message, discount_amount, voucher_dict).
+        """
+        clean_code = code.upper().strip()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM vouchers WHERE code = ?", (clean_code,))
+            row = await cursor.fetchone()
+
+            if not row:
+                return False, f"Kode voucher `{clean_code}` tidak ditemukan!", 0, None
+
+            v = dict(row)
+            if not v["is_active"]:
+                return False, f"Voucher `{clean_code}` sudah tidak aktif.", 0, None
+
+            if v["max_uses"] > 0 and v["current_uses"] >= v["max_uses"]:
+                return False, f"Kuota pemakaian voucher `{clean_code}` telah habis!", 0, None
+
+            # Cek apakah user sudah pernah memakai voucher ini
+            cursor = await db.execute(
+                "SELECT usage_id FROM voucher_usages WHERE code = ? AND user_id = ?",
+                (clean_code, user_id)
+            )
+            if await cursor.fetchone():
+                return False, f"Anda sudah pernah menggunakan voucher `{clean_code}` sebelumnya!", 0, None
+
+            if total_amount < v["min_spend"]:
+                return False, (
+                    f"Voucher `{clean_code}` memerlukan minimal belanja **Rp {v['min_spend']:,}** "
+                    f"(Total belanja saat ini: **Rp {total_amount:,}**)."
+                ), 0, None
+
+            # Hitung potongan diskon
+            if v["discount_type"] == "PERCENT":
+                discount = int(total_amount * (v["discount_value"] / 100.0))
+            else:
+                discount = int(v["discount_value"])
+
+            discount = min(discount, total_amount)
+            return True, f"Voucher `{clean_code}` berhasil dipasang!", discount, v
+
+    # =========================================================================
+    # ULASAN / TESTIMONI (REVIEWS)
+    # =========================================================================
+
+    async def record_review(
+        self, order_id: str, user_id: int, product_id: str, rating: int, comment: str
+    ) -> Tuple[bool, str]:
+        """Mencatat ulasan / testimoni pembeli."""
+        rating = max(1, min(5, int(rating)))
+        clean_comment = comment.strip()
+        if not clean_comment:
+            return False, "Komentar ulasan tidak boleh kosong."
+
+        async with aiosqlite.connect(self.db_path) as db:
+            # Pastikan order valid
+            cursor = await db.execute("SELECT order_id, product_id FROM orders WHERE order_id = ?", (order_id,))
+            order_row = await cursor.fetchone()
+            if not order_row:
+                return False, "Order ID tidak ditemukan!"
+
+            # Cek apakah sudah pernah direview
+            cursor = await db.execute("SELECT review_id FROM reviews WHERE order_id = ?", (order_id,))
+            if await cursor.fetchone():
+                return False, "Pesanan ini sudah pernah diberi ulasan sebelumnya!"
+
+            await db.execute(
+                """
+                INSERT INTO reviews (order_id, user_id, product_id, rating, comment)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (order_id, user_id, product_id, rating, clean_comment)
+            )
+            await db.commit()
+            return True, "Terima kasih! Ulasan Anda berhasil disimpan dan dibagikan."
+
+    async def has_order_been_reviewed(self, order_id: str) -> bool:
+        """Memeriksa apakah pesanan sudah diberi ulasan."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT review_id FROM reviews WHERE order_id = ?", (order_id,))
+            row = await cursor.fetchone()
+            return row is not None
+
+    async def get_product_rating(self, product_id: str) -> Dict[str, Any]:
+        """Mengambil rata-rata rating dan total ulasan untuk produk."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT AVG(rating), COUNT(*) FROM reviews WHERE product_id = ?",
+                (product_id,)
+            )
+            row = await cursor.fetchone()
+            avg_rating = round(row[0], 1) if row and row[0] is not None else 0.0
+            total_reviews = row[1] if row else 0
+            return {"average_rating": avg_rating, "total_reviews": total_reviews}
+
+    # =========================================================================
     # CHECKOUT & TRANSAKSI PEMBELIAN (ATOMIC)
     # =========================================================================
 
     async def purchase_product(
-        self, user_id: int, product_id: str, quantity: int = 1
+        self, user_id: int, product_id: str, quantity: int = 1, voucher_code: Optional[str] = None
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
         """
-        Menjalankan transaksi pembelian secara ATOMIC dengan dukungan Quantity & Akun per baris:
+        Menjalankan transaksi pembelian secara ATOMIC dengan dukungan Quantity, Akun, dan Voucher:
         1. Memeriksa keberadaan user & produk.
         2. Memastikan stok produk >= quantity.
-        3. Memastikan saldo user mencukupi (balance >= price * quantity).
-        4. Jika produk bertipe 'ACCOUNT', mengambil N baris akun unik yang belum terjual,
-           lalu membuat file order .txt secara otomatis (1 baris per akun).
-        5. Memotong saldo user.
+        3. Menghitung diskon voucher jika ada & memvalidasi saldo user.
+        4. Jika produk bertipe 'ACCOUNT', mengambil N baris akun unik yang belum terjual.
+        5. Memotong saldo user sejumlah harga setelah diskon.
         6. Mengurangi stok produk sebanyak quantity.
-        7. Mencatat riwayat pesanan (orders).
-        Semua step di atas dieksekusi dalam satu transaksi database untuk mencegah double-spend & double-delivery.
+        7. Mencatat penggunaan voucher dan riwayat pesanan (orders).
+        Semua step di atas dieksekusi dalam satu transaksi database untuk mencegah inkonsistensi.
         """
         quantity = max(1, int(quantity))
         async with aiosqlite.connect(self.db_path) as db:
@@ -484,14 +656,59 @@ class DatabaseManager:
                         f"• Diminta: **{quantity} unit**"
                     ), None
 
+                # Validasi Voucher jika digunakan
+                discount_amount = 0
+                applied_voucher = None
+                if voucher_code:
+                    clean_code = voucher_code.upper().strip()
+                    cursor = await db.execute("SELECT * FROM vouchers WHERE code = ?", (clean_code,))
+                    v_row = await cursor.fetchone()
+                    if not v_row:
+                        await db.rollback()
+                        return False, f"Voucher `{clean_code}` tidak valid atau tidak ditemukan.", None
+
+                    v = dict(v_row)
+                    if not v["is_active"]:
+                        await db.rollback()
+                        return False, f"Voucher `{clean_code}` sudah tidak aktif.", None
+
+                    if v["max_uses"] > 0 and v["current_uses"] >= v["max_uses"]:
+                        await db.rollback()
+                        return False, f"Kuota voucher `{clean_code}` telah habis!", None
+
+                    # Cek apakah user pernah memakai voucher ini
+                    cursor = await db.execute(
+                        "SELECT usage_id FROM voucher_usages WHERE code = ? AND user_id = ?",
+                        (clean_code, user_id)
+                    )
+                    if await cursor.fetchone():
+                        await db.rollback()
+                        return False, f"Anda sudah pernah menggunakan voucher `{clean_code}` sebelumnya!", None
+
+                    if total_price < v["min_spend"]:
+                        await db.rollback()
+                        return False, (
+                            f"Voucher `{clean_code}` memerlukan minimal belanja **Rp {v['min_spend']:,}** "
+                            f"(Total belanja saat ini: **Rp {total_price:,}**)."
+                        ), None
+
+                    if v["discount_type"] == "PERCENT":
+                        discount_amount = int(total_price * (v["discount_value"] / 100.0))
+                    else:
+                        discount_amount = int(v["discount_value"])
+
+                    discount_amount = min(discount_amount, total_price)
+                    applied_voucher = clean_code
+
+                final_price = max(0, total_price - discount_amount)
+
                 # Validasi saldo
-                if current_balance < total_price:
+                if current_balance < final_price:
                     await db.rollback()
-                    shortage = total_price - current_balance
+                    shortage = final_price - current_balance
                     return False, (
                         f"Saldo Anda tidak mencukupi!\n"
-                        f"• Harga Satuan: **Rp {price:,}** (Qty: {quantity})\n"
-                        f"• Total Tagihan: **Rp {total_price:,}**\n"
+                        f"• Total Tagihan: **Rp {final_price:,}**" + (f" *(Diskon Rp {discount_amount:,})*" if discount_amount > 0 else "") + "\n"
                         f"• Saldo Anda: **Rp {current_balance:,}**\n"
                         f"• Kekurangan: **Rp {shortage:,}**\n"
                         f"Silakan lakukan **Deposit** terlebih dahulu."
@@ -545,7 +762,7 @@ class DatabaseManager:
                 # 1. Potong Saldo
                 await db.execute(
                     "UPDATE users SET balance = balance - ? WHERE user_id = ?",
-                    (total_price, user_id)
+                    (final_price, user_id)
                 )
 
                 # 2. Kurangi Stok
@@ -554,13 +771,27 @@ class DatabaseManager:
                     (quantity, product_id)
                 )
 
-                # 3. Catat Order
+                # 3. Update Voucher Usage jika ada
+                if applied_voucher:
+                    await db.execute(
+                        "UPDATE vouchers SET current_uses = current_uses + 1 WHERE code = ?",
+                        (applied_voucher,)
+                    )
+                    await db.execute(
+                        """
+                        INSERT INTO voucher_usages (code, user_id, order_id, discount_applied)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (applied_voucher, user_id, order_id, discount_amount)
+                    )
+
+                # 4. Catat Order
                 await db.execute(
                     """
-                    INSERT INTO orders (order_id, user_id, product_id, price_paid, quantity, delivered_data, status)
-                    VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED')
+                    INSERT INTO orders (order_id, user_id, product_id, price_paid, quantity, delivered_data, voucher_code, discount_amount, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'COMPLETED')
                     """,
-                    (order_id, user_id, product_id, total_price, quantity, delivered_data_str)
+                    (order_id, user_id, product_id, final_price, quantity, delivered_data_str, applied_voucher, discount_amount)
                 )
 
                 await db.commit()
@@ -573,15 +804,18 @@ class DatabaseManager:
                     "product_type": product_type,
                     "quantity": quantity,
                     "unit_price": price,
-                    "price_paid": total_price,
-                    "remaining_balance": current_balance - total_price,
+                    "subtotal": total_price,
+                    "discount_amount": discount_amount,
+                    "voucher_code": applied_voucher,
+                    "price_paid": final_price,
+                    "remaining_balance": current_balance - final_price,
                     "file_path": delivered_file_path,
                     "delivered_lines": delivered_lines
                 }
 
                 logger.info(
                     "Pembelian Sukses: %s oleh User %d untuk Produk %s (Qty: %d, Total: Rp %s)",
-                    order_id, user_id, product["name"], quantity, f"{total_price:,}"
+                    order_id, user_id, product["name"], quantity, f"{final_price:,}"
                 )
                 return True, "Pembelian berhasil diproses!", order_info
 

@@ -20,8 +20,10 @@ GUILD_ID = int(os.getenv("GUILD_ID", 0)) if os.getenv("GUILD_ID") else None
 
 # Role & Channel IDs
 ADMIN_ROLE_ID = int(os.getenv("ADMIN_ROLE_ID", 0)) if os.getenv("ADMIN_ROLE_ID") else None
+CUSTOMER_ROLE_ID = int(os.getenv("CUSTOMER_ROLE_ID", 0)) if os.getenv("CUSTOMER_ROLE_ID") else None
 DEPOSIT_LOG_CHANNEL_ID = int(os.getenv("DEPOSIT_LOG_CHANNEL_ID", 0)) if os.getenv("DEPOSIT_LOG_CHANNEL_ID") else None
 TRANSACTION_LOG_CHANNEL_ID = int(os.getenv("TRANSACTION_LOG_CHANNEL_ID", 0)) if os.getenv("TRANSACTION_LOG_CHANNEL_ID") else None
+TESTIMONIAL_CHANNEL_ID = int(os.getenv("TESTIMONIAL_CHANNEL_ID", 0)) if os.getenv("TESTIMONIAL_CHANNEL_ID") else None
 
 # Pengaturan QRIS & Rekening
 QRIS_IMAGE_URL = os.getenv(

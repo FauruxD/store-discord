@@ -3,8 +3,9 @@ from discord import ui
 import os
 import logging
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import config
+from views.review import GiveReviewView
 
 logger = logging.getLogger("StoreBot.Views.Catalog")
 
@@ -99,22 +100,62 @@ class InputQuantityModal(ui.Modal, title="Tentukan Jumlah Pembelian"):
         await interaction.response.edit_message(embed=embed, view=self.parent_view)
 
 
+class InputVoucherModal(ui.Modal, title="Pasang Kode Voucher"):
+    """
+    Modal untuk memasukkan kode voucher promo diskon.
+    """
+    voucher_input = ui.TextInput(
+        label="Kode Voucher Promo",
+        placeholder="Contoh: PROMO10, DISKON5RB",
+        required=True,
+        min_length=2,
+        max_length=20
+    )
+
+    def __init__(self, parent_view: 'ConfirmPurchaseView'):
+        super().__init__()
+        self.parent_view = parent_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        code = self.voucher_input.value.strip().upper()
+        total_subtotal = self.parent_view.product["price"] * self.parent_view.quantity
+
+        is_valid, msg, discount_amount, _ = await self.parent_view.db.validate_voucher(
+            code, interaction.user.id, total_subtotal
+        )
+        if not is_valid:
+            return await interaction.response.send_message(f"❌ {msg}", ephemeral=True)
+
+        self.parent_view.voucher_code = code
+        self.parent_view.discount_amount = discount_amount
+        user_balance = await self.parent_view.db.get_balance(interaction.user.id)
+        embed = self.parent_view.build_embed(user_balance)
+        await interaction.response.edit_message(embed=embed, view=self.parent_view)
+        await interaction.followup.send(
+            f"🎉 **Voucher `{code}` Berhasil Dipasang!** Potongan diskon sebesar **Rp {discount_amount:,}** telah diterapkan.",
+            ephemeral=True
+        )
+
+
 class ConfirmPurchaseView(ui.View):
     """
-    View untuk verifikasi final pembelian produk oleh user dengan dukungan Quantity.
+    View untuk verifikasi final pembelian produk oleh user dengan dukungan Quantity & Voucher.
     """
     def __init__(self, db_manager, product: Dict[str, Any], initial_qty: int = 1):
         super().__init__(timeout=90)
         self.db = db_manager
         self.product = product
         self.quantity = initial_qty
+        self.voucher_code: Optional[str] = None
+        self.discount_amount: int = 0
         self.confirm_btn.label = f"Konfirmasi ({self.quantity} unit)" if self.quantity > 1 else "Konfirmasi Pembelian"
 
     def build_embed(self, user_balance: int) -> discord.Embed:
         """Membuat Embed Konfirmasi Produk & Rincian Total Harga."""
         price = self.product["price"]
         stock = self.product["stock"]
-        total_price = price * self.quantity
+        total_subtotal = price * self.quantity
+        final_bill = max(0, total_subtotal - self.discount_amount)
         prod_type = self.product.get("product_type", "FILE")
         type_badge = "👤 Akun Digital (.txt)" if prod_type == "ACCOUNT" else "📁 File Digital"
 
@@ -127,11 +168,18 @@ class ConfirmPurchaseView(ui.View):
         embed.add_field(name="Harga Satuan", value=f"Rp {price:,}", inline=True)
         embed.add_field(name="Sisa Stok", value=f"{stock} unit", inline=True)
         embed.add_field(name="Jumlah (Qty)", value=f"**{self.quantity} unit**", inline=True)
-        embed.add_field(name="Total Tagihan", value=f"**Rp {total_price:,}**", inline=True)
+        embed.add_field(name="Subtotal", value=f"Rp {total_subtotal:,}", inline=True)
+        if self.discount_amount > 0:
+            embed.add_field(
+                name="Diskon Voucher",
+                value=f"**-Rp {self.discount_amount:,}** (`{self.voucher_code}`)",
+                inline=True
+            )
+        embed.add_field(name="Total Tagihan", value=f"**Rp {final_bill:,}**", inline=True)
         embed.add_field(name="Saldo Anda", value=f"Rp {user_balance:,}", inline=True)
 
-        if user_balance < total_price:
-            shortage = total_price - user_balance
+        if user_balance < final_bill:
+            shortage = final_bill - user_balance
             embed.set_footer(text=f"⚠️ Saldo tidak mencukupi (Kurang Rp {shortage:,}). Silakan deposit terlebih dahulu.")
         else:
             embed.set_footer(text="✅ Saldo mencukupi. Klik tombol konfirmasi untuk checkout.")
@@ -147,14 +195,30 @@ class ConfirmPurchaseView(ui.View):
         user_id = interaction.user.id
         product_id = self.product["product_id"]
 
-        # Eksekusi transaksi atomik di database dengan parameter quantity
-        success, message, order_info = await self.db.purchase_product(user_id, product_id, self.quantity)
+        # Eksekusi transaksi atomik di database dengan parameter quantity & voucher
+        success, message, order_info = await self.db.purchase_product(
+            user_id, product_id, self.quantity, voucher_code=self.voucher_code
+        )
 
         if not success:
             return await interaction.followup.send(
                 f"❌ **Gagal Memproses Pembelian:**\n{message}",
                 ephemeral=True
             )
+
+        # Berikan role Customer otomatis jika dikonfigurasi
+        if config.CUSTOMER_ROLE_ID and interaction.guild:
+            try:
+                member = interaction.guild.get_member(user_id)
+                if not member:
+                    member = await interaction.guild.fetch_member(user_id)
+                if member and not any(r.id == config.CUSTOMER_ROLE_ID for r in member.roles):
+                    customer_role = interaction.guild.get_role(config.CUSTOMER_ROLE_ID)
+                    if customer_role:
+                        await member.add_roles(customer_role, reason="Auto Customer Role setelah pembelian sukses")
+                        logger.info("Auto customer role '%s' diberikan ke %s", customer_role.name, member.name)
+            except Exception as role_err:
+                logger.warning("Gagal memberikan customer role: %s", role_err)
 
         file_path_str = order_info.get("file_path", "")
         file_obj = Path(file_path_str)
@@ -185,6 +249,12 @@ class ConfirmPurchaseView(ui.View):
         )
         invoice_embed.add_field(name="Order ID", value=f"`{order_info['order_id']}`", inline=True)
         invoice_embed.add_field(name="Jumlah (Qty)", value=f"{order_info['quantity']} unit", inline=True)
+        if order_info.get("discount_amount", 0) > 0:
+            invoice_embed.add_field(
+                name="Diskon Voucher",
+                value=f"**-Rp {order_info['discount_amount']:,}** (`{order_info['voucher_code']}`)",
+                inline=True
+            )
         invoice_embed.add_field(name="Total Terpotong", value=f"Rp {order_info['price_paid']:,}", inline=True)
         invoice_embed.add_field(name="Sisa Saldo", value=f"Rp {order_info['remaining_balance']:,}", inline=True)
         invoice_embed.set_footer(text="Automated Store Delivery System")
@@ -206,13 +276,19 @@ class ConfirmPurchaseView(ui.View):
         except Exception as e:
             logger.debug("Gagal menghapus pesan konfirmasi pembelian: %s", e)
 
-        # Kirim konfirmasi transaksi sukses + lampirkan file produk secara privat (ephemeral)
+        # View ulasan/testimoni untuk pembeli
+        review_view = GiveReviewView(
+            self.db, order_info["order_id"], order_info["product_id"], order_info["product_name"]
+        )
+
+        # Kirim konfirmasi transaksi sukses + lampirkan file produk secara privat (ephemeral) + tombol review
         discord_file_ephemeral = discord.File(str(file_obj), filename=custom_filename)
         if dm_sent:
             await interaction.followup.send(
                 content="✅ **Transaksi Sukses!** File produk telah kami lampirkan di bawah ini dan salinannya juga telah dikirimkan ke **DM** Anda:",
                 embed=invoice_embed,
                 file=discord_file_ephemeral,
+                view=review_view,
                 ephemeral=True
             )
         else:
@@ -220,6 +296,7 @@ class ConfirmPurchaseView(ui.View):
                 content="✅ **Transaksi Sukses!** (DM Anda tertutup). File produk kami lampirkan secara privat di bawah ini:",
                 embed=invoice_embed,
                 file=discord_file_ephemeral,
+                view=review_view,
                 ephemeral=True
             )
 
@@ -235,6 +312,8 @@ class ConfirmPurchaseView(ui.View):
                 log_embed.add_field(name="Produk", value=order_info["product_name"], inline=True)
                 log_embed.add_field(name="Jumlah (Qty)", value=f"{order_info['quantity']} unit", inline=True)
                 log_embed.add_field(name="Total Bayar", value=f"Rp {order_info['price_paid']:,}", inline=True)
+                if order_info.get("voucher_code"):
+                    log_embed.add_field(name="Voucher Digunakan", value=f"`{order_info['voucher_code']}` (-Rp {order_info['discount_amount']:,})", inline=True)
                 log_embed.add_field(name="Order ID", value=f"`{order_info['order_id']}`", inline=True)
                 await log_channel.send(embed=log_embed)
 
@@ -242,6 +321,11 @@ class ConfirmPurchaseView(ui.View):
     async def change_qty_btn(self, interaction: discord.Interaction, button: ui.Button):
         """Membuka modal untuk mengatur jumlah pembelian."""
         await interaction.response.send_modal(InputQuantityModal(self))
+
+    @ui.button(label="Pakai Voucher", style=discord.ButtonStyle.secondary, emoji="🎟️", row=0)
+    async def voucher_btn(self, interaction: discord.Interaction, button: ui.Button):
+        """Membuka modal untuk memasukkan kode voucher promo."""
+        await interaction.response.send_modal(InputVoucherModal(self))
 
     @ui.button(label="Batal", style=discord.ButtonStyle.secondary, emoji="❌", row=0)
     async def cancel_btn(self, interaction: discord.Interaction, button: ui.Button):

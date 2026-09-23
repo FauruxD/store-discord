@@ -219,6 +219,89 @@ async def run_tests():
     assert prod_acc_cleared["stock"] == 0
     print(f"-> Berhasil kosongkan {cleared} akun belum terjual. Sisa stok: 0, Riwayat terjual: {stat4['sold_count']} (Aman)")
 
+    print("\n=== [12] Pengujian Sistem Voucher Diskon ===")
+    # Buat voucher FLAT 5000 (Min spend 20000, max uses 2)
+    ok_v1, _ = await db.create_voucher("HEMAT5K", "FLAT", 5000, min_spend=20000, max_uses=2)
+    assert ok_v1 is True
+
+    # Buat voucher PERCENT 20% (Tanpa min spend, max uses 1)
+    ok_v2, _ = await db.create_voucher("DISKON20", "PERCENT", 20, min_spend=0, max_uses=1)
+    assert ok_v2 is True
+    print("-> 2 Voucher (HEMAT5K & DISKON20) berhasil dibuat")
+
+    # Siapkan produk & stok untuk tes voucher (tambah 10 akun)
+    await db.add_account_stock("test_acc", [f"v_user_{i}@mail.com:pass" for i in range(10)])
+    v_buyer_1 = 3333333333
+    await db.add_balance(v_buyer_1, 50000)
+
+    # Cek syarat min spend: beli 1 unit (10.000) dengan HEMAT5K (min 20.000) -> harus gagal
+    valid_min, min_err, _, _ = await db.validate_voucher("HEMAT5K", v_buyer_1, 10000)
+    assert valid_min is False
+    print(f"-> Validasi syarat minimum belanja dicegah: {min_err.splitlines()[0]}")
+
+    # Beli 2 unit (20.000) dengan HEMAT5K -> diskon 5000, bayar 15000
+    buy_v_ok, _, order_v = await db.purchase_product(v_buyer_1, "test_acc", quantity=2, voucher_code="HEMAT5K")
+    assert buy_v_ok is True
+    assert order_v["subtotal"] == 20000
+    assert order_v["discount_amount"] == 5000
+    assert order_v["price_paid"] == 15000
+    assert order_v["remaining_balance"] == 35000
+    print(f"-> Pembelian dengan voucher HEMAT5K sukses! Bayar Rp {order_v['price_paid']:,} (Hemat Rp {order_v['discount_amount']:,})")
+
+    # Coba pakai ulang HEMAT5K oleh user yang sama -> harus ditolak
+    reuse_ok, reuse_err, _, _ = await db.validate_voucher("HEMAT5K", v_buyer_1, 30000)
+    assert reuse_ok is False
+    assert "sudah pernah menggunakan" in reuse_err
+    print(f"-> Validasi pemakaian ganda voucher dicegah: {reuse_err}")
+
+    # User 2 beli dengan DISKON20 (20% dari 30.000 = 6.000 diskon)
+    v_buyer_2 = 4444444444
+    await db.add_balance(v_buyer_2, 50000)
+    buy_pct_ok, _, order_pct = await db.purchase_product(v_buyer_2, "test_acc", quantity=3, voucher_code="DISKON20")
+    assert buy_pct_ok is True
+    assert order_pct["subtotal"] == 30000
+    assert order_pct["discount_amount"] == 6000
+    assert order_pct["price_paid"] == 24000
+    print(f"-> Pembelian persen DISKON20 sukses! Bayar Rp {order_pct['price_paid']:,} (Diskon 20% = Rp {order_pct['discount_amount']:,})")
+
+    # Cek kuota DISKON20 habis (max_uses = 1)
+    v_buyer_3 = 5555555555
+    quota_ok, quota_err, _, _ = await db.validate_voucher("DISKON20", v_buyer_3, 20000)
+    assert quota_ok is False
+    assert "habis" in quota_err
+    print(f"-> Validasi kuota voucher habis berhasil dicegah: {quota_err}")
+
+    print("\n=== [13] Pengujian Sistem Ulasan & Testimoni ===")
+    # Simpan ulasan untuk order_v
+    review_ok, review_msg = await db.record_review(
+        order_id=order_v["order_id"],
+        user_id=v_buyer_1,
+        product_id="test_acc",
+        rating=5,
+        comment="Pengiriman super cepat dan akun langsung login!"
+    )
+    assert review_ok is True
+    assert await db.has_order_been_reviewed(order_v["order_id"]) is True
+    print(f"-> Ulasan bintang 5 berhasil disimpan untuk {order_v['order_id']}")
+
+    # Coba beri ulasan kedua kali untuk order yang sama -> harus ditolak
+    dup_rev_ok, dup_rev_err = await db.record_review(
+        order_id=order_v["order_id"],
+        user_id=v_buyer_1,
+        product_id="test_acc",
+        rating=4,
+        comment="Ulasan duplikat"
+    )
+    assert dup_rev_ok is False
+    assert "sudah pernah" in dup_rev_err
+    print(f"-> Ulasan ganda untuk order yang sama dicegah: {dup_rev_err}")
+
+    # Cek rata-rata rating produk
+    rating_stat = await db.get_product_rating("test_acc")
+    assert rating_stat["total_reviews"] == 1
+    assert rating_stat["average_rating"] == 5.0
+    print(f"-> Statistik rating produk: ⭐ {rating_stat['average_rating']} ({rating_stat['total_reviews']} ulasan)")
+
     # Cleanup file order test
     if delivered_file.exists():
         delivered_file.unlink()

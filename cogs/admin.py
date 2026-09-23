@@ -543,6 +543,128 @@ class AdminCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(
+        name="create_voucher",
+        description="[Admin] Buat kode voucher promo diskon baru."
+    )
+    @app_commands.choices(
+        discount_type=[
+            app_commands.Choice(name="Persentase (%)", value="PERCENT"),
+            app_commands.Choice(name="Potongan Flat (Rupiah)", value="FLAT"),
+        ]
+    )
+    @app_commands.describe(
+        code="Kode voucher (contoh: PROMO10, DISKON5RB)",
+        discount_type="Pilih tipe diskon: Persen atau Flat",
+        discount_value="Nilai diskon (contoh: 10 untuk 10%, atau 5000 untuk Rp 5.000)",
+        min_spend="Minimal total belanja untuk bisa pakai voucher ini (0 = tanpa minimal)",
+        max_uses="Batas total kuota penggunaan voucher (0 = tidak terbatas)"
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def create_voucher(
+        self,
+        interaction: discord.Interaction,
+        code: str,
+        discount_type: str,
+        discount_value: int,
+        min_spend: int = 0,
+        max_uses: int = 0
+    ):
+        """Membuat kode voucher promo."""
+        clean_code = code.upper().strip()
+        success, msg = await self.bot.db.create_voucher(
+            clean_code, discount_type, discount_value, min_spend, max_uses
+        )
+        if not success:
+            return await interaction.response.send_message(f"❌ {msg}", ephemeral=True)
+
+        embed = discord.Embed(
+            title="🎟️ Voucher Berhasil Dibuat!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Kode Voucher", value=f"`{clean_code}`", inline=True)
+        disc_text = f"{discount_value}%" if discount_type == "PERCENT" else f"Rp {discount_value:,}"
+        embed.add_field(name="Diskon", value=f"**{disc_text}**", inline=True)
+        embed.add_field(name="Min. Belanja", value=f"Rp {min_spend:,}" if min_spend > 0 else "Tanpa Minimal", inline=True)
+        embed.add_field(name="Kuota Pemakaian", value=f"{max_uses} kali" if max_uses > 0 else "Unlimited", inline=True)
+        embed.set_footer(text="Pembeli dapat memasukkan kode ini pada menu [🎟️ Pakai Voucher] saat checkout.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="list_vouchers",
+        description="[Admin] Menampilkan daftar seluruh kode voucher promo yang ada."
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def list_vouchers(self, interaction: discord.Interaction):
+        """Menampilkan semua voucher."""
+        vouchers = await self.bot.db.get_all_vouchers()
+        if not vouchers:
+            return await interaction.response.send_message("Belum ada voucher promo yang dibuat.", ephemeral=True)
+
+        embed = discord.Embed(
+            title="🎟️ Daftar Voucher Promo Store",
+            color=discord.Color.gold()
+        )
+        for v in vouchers:
+            disc_str = f"{v['discount_value']}%" if v["discount_type"] == "PERCENT" else f"Rp {v['discount_value']:,}"
+            status_str = "🟢 Aktif" if v["is_active"] else "🔴 Nonaktif"
+            quota_str = f"{v['current_uses']}/{v['max_uses']}" if v["max_uses"] > 0 else f"{v['current_uses']} (Unlimited)"
+            embed.add_field(
+                name=f"Kode: `{v['code']}` ({status_str})",
+                value=(
+                    f"• Diskon: **{disc_str}**\n"
+                    f"• Min. Belanja: Rp {v['min_spend']:,}\n"
+                    f"• Kuota Terpakai: **{quota_str}**"
+                ),
+                inline=False
+            )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="delete_voucher",
+        description="[Admin] Hapus kode voucher promo dari database."
+    )
+    @app_commands.describe(code="Kode voucher yang ingin dihapus")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def delete_voucher(self, interaction: discord.Interaction, code: str):
+        """Menghapus voucher."""
+        clean_code = code.upper().strip()
+        success = await self.bot.db.delete_voucher(clean_code)
+        if success:
+            await interaction.response.send_message(f"✅ Voucher `{clean_code}` berhasil dihapus!", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ Voucher `{clean_code}` tidak ditemukan.", ephemeral=True)
+
+    @app_commands.command(
+        name="setup_customer_role",
+        description="[Admin] Konfigurasi role yang otomatis diberikan ke pembeli setelah belanja sukses."
+    )
+    @app_commands.describe(role="Role Discord yang akan diberikan ke pelanggan baru")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def setup_customer_role(self, interaction: discord.Interaction, role: discord.Role):
+        """Mengatur role customer otomatis."""
+        config.CUSTOMER_ROLE_ID = role.id
+        await interaction.response.send_message(
+            f"✅ Role pelanggan otomatis berhasil disetel ke {role.mention} (`{role.id}`)!\n"
+            f"Setiap pembeli yang sukses menyelesaikan transaksi akan otomatis mendapatkan role ini.",
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="setup_testimoni_channel",
+        description="[Admin] Konfigurasi channel tempat bot memposting ulasan/testimoni pelanggan."
+    )
+    @app_commands.describe(channel="Channel teks untuk memposting testimoni")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def setup_testimoni_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        """Mengatur channel testimoni."""
+        config.TESTIMONIAL_CHANNEL_ID = channel.id
+        await interaction.response.send_message(
+            f"✅ Channel testimoni berhasil disetel ke {channel.mention} (`{channel.id}`)!\n"
+            f"Ulasan bintang dan testimoni dari pembeli akan otomatis diposting ke channel ini.",
+            ephemeral=True
+        )
+
+    @app_commands.command(
         name="setup_owner_panel",
         description="[Owner/Admin] Pasang panel khusus kontrol CRUD produk di channel ini."
     )
