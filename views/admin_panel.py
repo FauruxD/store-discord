@@ -84,6 +84,39 @@ class UpdatePriceModal(ui.Modal, title="Update Harga Produk"):
             await interaction.response.send_message("❌ Gagal memperbarui harga produk.", ephemeral=True)
 
 
+class RestockAccountModal(ui.Modal, title="Input Stok Akun"):
+    accounts_input = ui.TextInput(
+        label="Daftar Akun (1 Akun per Baris)",
+        style=discord.TextStyle.paragraph,
+        placeholder="email1:pass1\nemail2:pass2\nuser3:pass3...",
+        required=True,
+        min_length=3,
+        max_length=4000
+    )
+
+    def __init__(self, db_manager, product_id: str, product_name: str):
+        super().__init__()
+        self.db = db_manager
+        self.product_id = product_id
+        self.product_name = product_name
+
+    async def on_submit(self, interaction: discord.Interaction):
+        lines = self.accounts_input.value.splitlines()
+        added = await self.db.add_account_stock(self.product_id, lines)
+        if added == 0:
+            return await interaction.response.send_message(
+                "⚠️ Tidak ada akun valid yang terdeteksi dalam input Anda.",
+                ephemeral=True
+            )
+        prod = await self.db.get_product(self.product_id)
+        current_stock = prod["stock"] if prod else added
+        await interaction.response.send_message(
+            f"✅ Berhasil menambahkan **{added} akun** ke produk **{self.product_name}** (`{self.product_id}`)!\n"
+            f"📦 Total stok akun tersedia saat ini: **{current_stock} unit**.",
+            ephemeral=True
+        )
+
+
 # =============================================================================
 # VIEW DETAIL EDIT & HAPUS
 # =============================================================================
@@ -107,6 +140,12 @@ class ProductEditActionView(ui.View):
             UpdatePriceModal(self.db, self.product["product_id"], self.product["name"])
         )
 
+    @ui.button(label="Input Akun", style=discord.ButtonStyle.secondary, emoji="📥")
+    async def restock_acc_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(
+            RestockAccountModal(self.db, self.product["product_id"], self.product["name"])
+        )
+
     @ui.button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️")
     async def close_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -123,9 +162,11 @@ class SelectProductToEditDropdown(ui.Select):
 
         options = []
         for p in products[:25]:
+            ptype = p.get("product_type", "FILE")
+            type_tag = "[AKUN]" if ptype == "ACCOUNT" else "[FILE]"
             options.append(
                 discord.SelectOption(
-                    label=p["name"][:100],
+                    label=f"{type_tag} {p['name']}"[:100],
                     value=p["product_id"],
                     description=f"Harga: Rp {p['price']:,} | Stok: {p['stock']}"[:100],
                     emoji="✏️"
@@ -133,7 +174,7 @@ class SelectProductToEditDropdown(ui.Select):
             )
 
         super().__init__(
-            placeholder="Pilih produk yang ingin diedit...",
+            placeholder="Pilih produk yang ingin diedit / restock...",
             min_values=1,
             max_values=1,
             options=options
@@ -145,15 +186,18 @@ class SelectProductToEditDropdown(ui.Select):
         if not product:
             return await interaction.response.send_message("❌ Produk tidak ditemukan.", ephemeral=True)
 
+        prod_type = product.get("product_type", "FILE")
+        type_str = "👤 Akun Digital (.txt)" if prod_type == "ACCOUNT" else "📁 File Digital"
+
         embed = discord.Embed(
             title=f"✏️ Kelola Produk: {product['name']}",
-            description=f"**ID:** `{product['product_id']}`\n{product.get('description', '')}",
+            description=f"**ID:** `{product['product_id']}`\n**Tipe:** {type_str}\n{product.get('description', '')}",
             color=discord.Color.blue()
         )
         embed.add_field(name="Harga Saat Ini", value=f"Rp {product['price']:,}", inline=True)
         embed.add_field(name="Stok Saat Ini", value=f"{product['stock']} unit", inline=True)
-        embed.add_field(name="File", value=f"`{Path(product['file_path']).name}`", inline=False)
-        embed.set_footer(text="Klik tombol di bawah untuk mengubah stok atau harga.")
+        embed.add_field(name="File / Storage", value=f"`{Path(product['file_path']).name}`", inline=False)
+        embed.set_footer(text="Klik tombol di bawah untuk mengubah stok, harga, atau input akun.")
 
         view = ProductEditActionView(self.db, product)
         await interaction.response.edit_message(embed=embed, view=view)
@@ -310,6 +354,8 @@ class OwnerAdminPanelView(ui.View):
         )
 
         for p in products:
+            ptype = p.get("product_type", "FILE")
+            type_str = "👤 Akun Digital (.txt)" if ptype == "ACCOUNT" else "📁 File Digital"
             file_exists = Path(p["file_path"]).exists()
             file_badge = "🟢 Ready" if file_exists else "🔴 File Hilang!"
             stock_badge = "🟢 Tersedia" if p["stock"] > 0 else "🔴 Habis"
@@ -317,9 +363,10 @@ class OwnerAdminPanelView(ui.View):
             embed.add_field(
                 name=f"{p['name']} (`{p['product_id']}`)",
                 value=(
+                    f"• Tipe: **{type_str}**\n"
                     f"• Harga: **Rp {p['price']:,}**\n"
                     f"• Stok: **{p['stock']} unit** ({stock_badge})\n"
-                    f"• File: `{Path(p['file_path']).name}` ({file_badge})"
+                    f"• File / Data: `{Path(p['file_path']).name}` ({file_badge})"
                 ),
                 inline=False
             )
@@ -339,20 +386,21 @@ class OwnerAdminPanelView(ui.View):
         embed = discord.Embed(
             title="➕ Cara Menambahkan Produk Baru",
             description=(
-                "Untuk mendaftarkan produk digital baru beserta filenya (`.lua`, `.zip`, `.txt`):\n\n"
+                "Untuk mendaftarkan produk digital baru (`FILE` atau `ACCOUNT`):\n\n"
                 "Ketik slash command di chat:\n"
                 "👉 `/add_product`\n\n"
                 "**Parameter yang diisi:**\n"
-                "• `product_id`: ID unik tanpa spasi (contoh: `script_v1`)\n"
-                "• `name`: Nama produk (contoh: `Script Auto Hunter`)\n"
+                "• `product_id`: ID unik tanpa spasi (contoh: `netflix_acc` atau `script_v1`)\n"
+                "• `name`: Nama produk (contoh: `Akun Netflix 1 Bulan`)\n"
                 "• `description`: Deskripsi singkat produk\n"
-                "• `price`: Harga produk (contoh: `25000`)\n"
-                "• `stock`: Jumlah stok awal (contoh: `50`)\n"
-                "• `file`: **Upload file produk langsung dari HP/PC Anda!**"
+                "• `price`: Harga satuan produk (contoh: `30000`)\n"
+                "• `product_type`: Pilih **`👤 Akun Digital`** atau **`📁 File Digital`**\n"
+                "• `file`: **Upload file produk langsung dari HP/PC Anda!**\n"
+                "  *(Jika Akun, upload file `.txt` berisi daftar akun 1 baris per akun)*"
             ),
             color=discord.Color.green()
         )
-        embed.set_footer(text="File akan otomatis tersimpan di storage VPS secara aman.")
+        embed.set_footer(text="File / Data akun akan otomatis tersimpan di storage dan database.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @ui.button(
@@ -373,12 +421,38 @@ class OwnerAdminPanelView(ui.View):
 
         embed = discord.Embed(
             title="✏️ Pilih Produk untuk Diedit / Di-restock",
-            description="Pilih produk dari menu dropdown di bawah ini untuk mengubah stok atau harganya:",
+            description="Pilih produk dari menu dropdown di bawah ini untuk mengubah stok, harga, atau input akun:",
             color=discord.Color.gold()
         )
 
         view = ProductEditSelectView(self.db, products)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @ui.button(
+        label="Restock Akun",
+        style=discord.ButtonStyle.secondary,
+        emoji="📥",
+        custom_id="owner_panel_restock_accounts_btn",
+        row=1
+    )
+    async def restock_accounts_guide_btn(self, interaction: discord.Interaction, button: ui.Button):
+        """[Restock] Panduan praktis restock akun digital massal."""
+        embed = discord.Embed(
+            title="📥 Panduan Restock Akun Digital",
+            description=(
+                "Ada 2 metode mudah untuk menambah stok akun:\n\n"
+                "**1️⃣ Menggunakan Slash Command (Upload File .txt):**\n"
+                "👉 `/restock_accounts product_id:<ID_PRODUK> file:<UPLOAD_TXT>`\n"
+                "*Cukup upload file .txt berisi daftar akun (1 akun per baris). Sistem langsung memasukkan semua akun ke stok!*\n\n"
+                "**2️⃣ Paste Langsung via Pop-up Input:**\n"
+                "1. Klik tombol **`✏️ Edit / Restock`** di panel ini.\n"
+                "2. Pilih produk akun Anda dari menu dropdown.\n"
+                "3. Klik tombol **`📥 Input Akun`** lalu paste baris akun Anda ke formulir pop-up!"
+            ),
+            color=discord.Color.teal()
+        )
+        embed.set_footer(text="Format akun bebas (contoh: email:password atau user | token)")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @ui.button(
         label="Hapus Produk (Delete)",

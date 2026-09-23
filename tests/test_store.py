@@ -103,7 +103,91 @@ async def run_tests():
     assert prod_deleted is None
     print("-> Produk berhasil dihapus dari database.")
 
-    # Cleanup
+    print("\n=== [10] Pengujian Produk Akun & Pembelian Multi-Qty (.txt delivery) ===")
+    # Tambah produk tipe ACCOUNT
+    acc_dummy_path = BASE_DIR / "assets" / "products" / "test_accounts.txt"
+    acc_dummy_path.touch(exist_ok=True)
+    await db.add_or_update_product(
+        product_id="test_acc",
+        name="Akun Streaming Premium",
+        description="Akun streaming 1 bulan",
+        price=10000,
+        stock=0,
+        file_path=str(acc_dummy_path),
+        product_type="ACCOUNT"
+    )
+
+    # Restock 5 akun
+    account_pool = [
+        "user1@mail.com:pass123",
+        "user2@mail.com:secret456",
+        "user3@mail.com:qwerty789",
+        "user4@mail.com:letmein10",
+        "user5@mail.com:pass5555"
+    ]
+    added = await db.add_account_stock("test_acc", account_pool)
+    assert added == 5
+    prod_acc = await db.get_product("test_acc")
+    assert prod_acc["stock"] == 5
+    assert prod_acc["product_type"] == "ACCOUNT"
+    print(f"-> 5 Akun berhasil di-restock ke produk '{prod_acc['name']}' (Stok: {prod_acc['stock']})")
+
+    # Siapkan balance user untuk beli 2 akun (Rp 20,000)
+    buyer_id = 8888888888
+    await db.add_balance(buyer_id, 50000)
+
+    # Pembelian Qty = 2
+    success_buy_acc, msg_acc, order_acc = await db.purchase_product(buyer_id, "test_acc", quantity=2)
+    assert success_buy_acc is True
+    assert order_acc["quantity"] == 2
+    assert order_acc["price_paid"] == 20000  # 10000 * 2
+    assert order_acc["remaining_balance"] == 30000
+    print(f"-> Pembelian 2 akun sukses! Total terpotong: Rp {order_acc['price_paid']:,}")
+
+    # Verifikasi file .txt yang digenerate
+    delivered_file = Path(order_acc["file_path"])
+    assert delivered_file.exists(), f"File {delivered_file} harus digenerate!"
+    with open(delivered_file, "r", encoding="utf-8") as f:
+        file_lines = f.read().splitlines()
+
+    assert len(file_lines) == 2, f"Harus ada 2 akun di file, didapat: {len(file_lines)}"
+    assert file_lines[0] == "user1@mail.com:pass123"
+    assert file_lines[1] == "user2@mail.com:secret456"
+    print(f"-> File .txt berhasil digenerate ({delivered_file.name}):")
+    for line in file_lines:
+        print(f"   {line}")
+
+    # Verifikasi sisa stok akun di database (harus 3)
+    prod_acc_after = await db.get_product("test_acc")
+    assert prod_acc_after["stock"] == 3
+    unsold_count = await db.get_unsold_accounts_count("test_acc")
+    assert unsold_count == 3
+    print(f"-> Sisa stok akun setelah pembelian: {prod_acc_after['stock']} unit")
+
+    # Coba beli Qty = 4 (Stok hanya 3, harus ditolak)
+    fail_qty_success, fail_qty_msg, _ = await db.purchase_product(buyer_id, "test_acc", quantity=4)
+    assert fail_qty_success is False
+    assert "tidak mencukupi" in fail_qty_msg
+    print(f"-> Pembelian melebihi sisa stok berhasil dicegah: {fail_qty_msg.splitlines()[0]}")
+
+    # Beli sisa 3 akun
+    buy_all_success, _, order_all = await db.purchase_product(buyer_id, "test_acc", quantity=3)
+    assert buy_all_success is True
+    assert order_all["quantity"] == 3
+    prod_acc_empty = await db.get_product("test_acc")
+    assert prod_acc_empty["stock"] == 0
+    print(f"-> Pembelian sisa 3 akun sukses! Stok sekarang: {prod_acc_empty['stock']} unit")
+
+    # Cleanup file order test
+    if delivered_file.exists():
+        delivered_file.unlink()
+    order_all_file = Path(order_all["file_path"])
+    if order_all_file.exists():
+        order_all_file.unlink()
+    if acc_dummy_path.exists():
+        acc_dummy_path.unlink()
+
+    # Cleanup DB
     if test_db_path.exists():
         test_db_path.unlink()
     print("\n✅ SEMUA PENGUJIAN DATABASE & TRANSAKSI STORE LOLOS 100%!")

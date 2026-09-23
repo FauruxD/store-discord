@@ -61,13 +61,20 @@ class AdminCog(commands.Cog):
         name="add_product",
         description="[Admin] Tambahkan atau perbarui produk digital ke katalog toko."
     )
+    @app_commands.choices(
+        product_type=[
+            app_commands.Choice(name="📁 File Digital (.lua, .zip, dll)", value="FILE"),
+            app_commands.Choice(name="👤 Akun Digital / Combo List (.txt)", value="ACCOUNT"),
+        ]
+    )
     @app_commands.describe(
-        product_id="ID unik produk (tanpa spasi, contoh: script_v1)",
+        product_id="ID unik produk (tanpa spasi, contoh: netflix_acc)",
         name="Nama produk",
         description="Deskripsi singkat produk",
-        price="Harga produk dalam Rupiah",
-        stock="Jumlah stok yang tersedia",
-        file="[Paling Mudah] Upload file produk langsung di Discord (.lua, .zip, .txt)",
+        price="Harga satuan produk dalam Rupiah",
+        stock="Jumlah stok (diabaikan/otomatis dihitung jika mengupload list akun)",
+        product_type="Pilih tipe produk: File statis biasa atau Akun per baris",
+        file="Upload file produk (.lua, .zip) atau file .txt list akun awal",
         file_name="[Opsional] Nama file yang sudah ada di folder assets/products/ di server"
     )
     @app_commands.checks.has_permissions(administrator=True)
@@ -78,21 +85,29 @@ class AdminCog(commands.Cog):
         name: str,
         description: str,
         price: int,
-        stock: int,
+        stock: int = 0,
+        product_type: str = "FILE",
         file: Optional[discord.Attachment] = None,
         file_name: Optional[str] = None
     ):
-        """Mendaftarkan produk digital ke database dengan opsi upload file langsung."""
+        """Mendaftarkan produk digital ke database dengan dukungan tipe File dan Akun."""
         if price < 0 or stock < 0:
             return await interaction.response.send_message("❌ Harga dan stok tidak boleh negatif!", ephemeral=True)
 
         destination_path = None
+        account_lines = []
 
         # Jika admin mengunggah file attachment langsung di Discord
         if file is not None:
             config.PRODUCTS_DIR.mkdir(parents=True, exist_ok=True)
             destination_path = config.PRODUCTS_DIR / file.filename
             try:
+                # Jika tipe akun, baca isinya untuk initial stock
+                if product_type == "ACCOUNT":
+                    raw_bytes = await file.read()
+                    text_content = raw_bytes.decode("utf-8", errors="ignore")
+                    account_lines = text_content.splitlines()
+
                 await file.save(destination_path)
                 logger.info("File produk '%s' berhasil diunggah & disimpan ke %s", file.filename, destination_path)
             except Exception as e:
@@ -109,32 +124,120 @@ class AdminCog(commands.Cog):
                     f"Silakan gunakan parameter `file` untuk mengunggah file langsung dari Discord.",
                     ephemeral=True
                 )
+            if product_type == "ACCOUNT":
+                try:
+                    with open(destination_path, "r", encoding="utf-8", errors="ignore") as f:
+                        account_lines = f.read().splitlines()
+                except Exception:
+                    pass
         else:
-            return await interaction.response.send_message(
-                "⚠️ Harap lampirkan file produk melalui parameter `file` (upload langsung) atau sebutkan `file_name`!",
-                ephemeral=True
-            )
+            if product_type == "ACCOUNT":
+                # Produk akun bisa dibuat tanpa file fisik awal (stok awal 0)
+                dummy_file = config.PRODUCTS_DIR / f"{product_id}.txt"
+                dummy_file.touch(exist_ok=True)
+                destination_path = dummy_file
+            else:
+                return await interaction.response.send_message(
+                    "⚠️ Harap lampirkan file produk melalui parameter `file` (upload langsung) atau sebutkan `file_name`!",
+                    ephemeral=True
+                )
 
+        clean_prod_id = product_id.lower().strip()
         await self.bot.db.add_or_update_product(
-            product_id=product_id.lower().strip(),
+            product_id=clean_prod_id,
             name=name,
             description=description,
             price=price,
             stock=stock,
-            file_path=str(destination_path)
+            file_path=str(destination_path),
+            product_type=product_type
         )
+
+        added_accounts = 0
+        if product_type == "ACCOUNT" and account_lines:
+            added_accounts = await self.bot.db.add_account_stock(clean_prod_id, account_lines)
+
+        updated_prod = await self.bot.db.get_product(clean_prod_id)
+        final_stock = updated_prod["stock"] if updated_prod else stock
 
         embed = discord.Embed(
             title="✅ Produk Berhasil Disimpan!",
             color=discord.Color.green()
         )
-        embed.add_field(name="Product ID", value=f"`{product_id.lower().strip()}`", inline=True)
+        embed.add_field(name="Product ID", value=f"`{clean_prod_id}`", inline=True)
         embed.add_field(name="Nama", value=name, inline=True)
+        embed.add_field(name="Tipe", value="👤 Akun Digital (.txt)" if product_type == "ACCOUNT" else "📁 File Digital", inline=True)
         embed.add_field(name="Harga", value=f"Rp {price:,}", inline=True)
-        embed.add_field(name="Stok", value=f"{stock} unit", inline=True)
-        embed.add_field(name="File Produk", value=f"`{destination_path.name}`", inline=False)
+        embed.add_field(name="Total Stok", value=f"**{final_stock} unit**" + (f" ({added_accounts} akun terinput)" if added_accounts else ""), inline=True)
+        embed.add_field(name="File / Data Path", value=f"`{destination_path.name}`", inline=False)
         embed.set_footer(text="Produk sekarang aktif dan siap dibeli di katalog!")
 
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="restock_accounts",
+        description="[Admin] Tambahkan stok akun baru ke produk bertipe ACCOUNT (1 baris per akun)."
+    )
+    @app_commands.describe(
+        product_id="ID produk akun yang ingin di-restock",
+        file="[Paling Mudah] Upload file .txt berisi daftar akun (1 akun per baris)",
+        accounts_text="Atau paste teks akun di sini jika tidak menggunakan file"
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def restock_accounts(
+        self,
+        interaction: discord.Interaction,
+        product_id: str,
+        file: Optional[discord.Attachment] = None,
+        accounts_text: Optional[str] = None
+    ):
+        """Menambahkan akun digital secara massal ke produk."""
+        clean_id = product_id.lower().strip()
+        prod = await self.bot.db.get_product(clean_id)
+        if not prod:
+            return await interaction.response.send_message(
+                f"❌ Produk dengan ID `{product_id}` tidak ditemukan!",
+                ephemeral=True
+            )
+
+        account_lines = []
+        if file is not None:
+            try:
+                raw_bytes = await file.read()
+                text_content = raw_bytes.decode("utf-8", errors="ignore")
+                account_lines = text_content.splitlines()
+            except Exception as e:
+                return await interaction.response.send_message(
+                    f"❌ Gagal membaca file attachment: {str(e)}",
+                    ephemeral=True
+                )
+        elif accounts_text:
+            account_lines = accounts_text.splitlines()
+        else:
+            return await interaction.response.send_message(
+                "⚠️ Harap upload file `.txt` berisi list akun atau masukkan teks akun pada parameter `accounts_text`!",
+                ephemeral=True
+            )
+
+        added = await self.bot.db.add_account_stock(clean_id, account_lines)
+        if added == 0:
+            return await interaction.response.send_message(
+                "⚠️ Tidak ada data akun valid yang ditemukan dalam input Anda (pastikan tidak hanya baris kosong).",
+                ephemeral=True
+            )
+
+        updated_prod = await self.bot.db.get_product(clean_id)
+        embed = discord.Embed(
+            title="📥 Restock Akun Berhasil!",
+            description=(
+                f"Berhasil menambahkan **{added} akun** ke produk **{updated_prod['name']}**!\n"
+                f"Total stok tersedia saat ini: **{updated_prod['stock']} unit**"
+            ),
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Product ID", value=f"`{clean_id}`", inline=True)
+        embed.add_field(name="Harga Satuan", value=f"Rp {updated_prod['price']:,}", inline=True)
+        embed.set_footer(text="Stok katalog otomatis ter-update dan siap dibeli pembeli.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(
@@ -229,11 +332,18 @@ class AdminCog(commands.Cog):
         )
 
         for p in products:
+            ptype = p.get("product_type", "FILE")
+            type_str = "👤 Akun Digital (.txt)" if ptype == "ACCOUNT" else "📁 File Digital"
             file_exists = Path(p["file_path"]).exists()
             file_status = "🟢 File Ready" if file_exists else "🔴 File Hilang!"
             embed.add_field(
                 name=f"{p['name']} (`{p['product_id']}`)",
-                value=f"• Harga: Rp {p['price']:,}\n• Stok: {p['stock']}\n• File: `{Path(p['file_path']).name}` ({file_status})",
+                value=(
+                    f"• Tipe: **{type_str}**\n"
+                    f"• Harga: Rp {p['price']:,}\n"
+                    f"• Stok: **{p['stock']} unit**\n"
+                    f"• File / Data: `{Path(p['file_path']).name}` ({file_status})"
+                ),
                 inline=False
             )
 

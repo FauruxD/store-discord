@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS products (
     price INTEGER NOT NULL CHECK(price >= 0),
     stock INTEGER NOT NULL DEFAULT 0 CHECK(stock >= 0),
     file_path TEXT NOT NULL,
+    product_type TEXT NOT NULL DEFAULT 'FILE', -- FILE atau ACCOUNT
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -22,6 +23,8 @@ CREATE TABLE IF NOT EXISTS orders (
     user_id INTEGER NOT NULL,
     product_id TEXT NOT NULL,
     price_paid INTEGER NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+    delivered_data TEXT,
     status TEXT NOT NULL DEFAULT 'COMPLETED',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(user_id),
@@ -40,4 +43,16 @@ CREATE TABLE IF NOT EXISTS deposits (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(user_id)
+);
+
+-- Tabel Stok Akun Digital (Per Baris)
+CREATE TABLE IF NOT EXISTS product_accounts (
+    account_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id TEXT NOT NULL,
+    account_data TEXT NOT NULL,
+    is_sold INTEGER NOT NULL DEFAULT 0, -- 0 = Tersedia, 1 = Terjual
+    order_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sold_at TIMESTAMP,
+    FOREIGN KEY(product_id) REFERENCES products(product_id) ON DELETE CASCADE
 );
