@@ -1,0 +1,21 @@
+# Environment variables (Berisi token rahasia)
+.env
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# SQLite Database
+database/*.db
+*.db
+*.sqlite3
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# OS specific
+.DS_Store
+Thumbs.db
