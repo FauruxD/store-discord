@@ -18,7 +18,7 @@ class DepositInstructionsView(ui.View):
         self.db = db_manager
         self.instruction_interaction = instruction_interaction
 
-    @ui.button(label="Isi Formulir Konfirmasi Deposit", style=discord.ButtonStyle.primary, emoji="📝")
+    @ui.button(label="Formulir Manual (Link/Teks)", style=discord.ButtonStyle.primary, emoji="📝")
     async def open_modal_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_modal(DepositModal(self.db, instruction_interaction=self.instruction_interaction))
 
@@ -79,10 +79,12 @@ class MainDashboardView(ui.View):
             description=(
                 "Silakan lakukan pembayaran sesuai dengan nominal yang Anda inginkan menggunakan salah satu metode di bawah ini:\n\n"
                 f"{config.BANK_TRANSFER_INFO}\n\n"
-                "**Langkah-langkah Deposit:**\n"
-                "1. Transfer dana ke salah satu rekening atau scan QRIS di bawah.\n"
-                "2. Simpan bukti transfer (struk/screenshot).\n"
-                "3. Klik tombol **'Isi Formulir Konfirmasi Deposit'** di bawah untuk mengirim laporan pembayaran ke admin."
+                "**📸 Cara Konfirmasi Deposit Praktis (Upload Foto Langsung):**\n"
+                "Ketik slash command di chat:\n"
+                "👉 `/deposit` lalu masukkan nominal & pilih foto screenshot bukti transfer langsung dari galeri HP / file PC Anda!\n"
+                "*(100% privat, foto Anda hanya dapat dilihat oleh Admin)*\n\n"
+                "**📝 Menggunakan Formulir Manual:**\n"
+                "Jika bukti transfer berupa link atau nama rekening pengirim, klik tombol **'Formulir Manual'** di bawah."
             ),
             color=discord.Color.gold()
         )
