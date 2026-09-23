@@ -278,6 +278,104 @@ class DatabaseManager:
                 "unsold_accounts": unsold_lines
             }
 
+    async def clear_unsold_accounts(self, product_id: str) -> int:
+        """
+        Menghapus seluruh akun yang BELUM terjual (is_sold = 0) untuk suatu produk.
+        Akun yang sudah terjual (riwayat pesanan pembeli) tetap tersimpan dengan aman.
+        Otomatis menyinkronkan stok produk menjadi 0.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE;")
+            cursor = await db.execute(
+                "DELETE FROM product_accounts WHERE product_id = ? AND is_sold = 0",
+                (product_id,)
+            )
+            deleted_count = cursor.rowcount
+
+            await db.execute(
+                "UPDATE products SET stock = 0 WHERE product_id = ?",
+                (product_id,)
+            )
+            await db.commit()
+            logger.info("Berhasil mengosongkan %d akun belum terjual untuk produk %s", deleted_count, product_id)
+            return deleted_count
+
+    async def replace_account_stock(self, product_id: str, new_lines: List[str]) -> Tuple[int, int]:
+        """
+        Mengganti seluruh stok akun yang belum terjual dengan daftar akun baru.
+        Akun yang sudah terjual tetap aman.
+        Mengembalikan (jumlah_akun_lama_dihapus, jumlah_akun_baru_dimasukkan).
+        """
+        valid_lines = [line.strip() for line in new_lines if line.strip()]
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE;")
+            # Hapus akun lama yang belum terjual
+            cursor = await db.execute(
+                "DELETE FROM product_accounts WHERE product_id = ? AND is_sold = 0",
+                (product_id,)
+            )
+            deleted_count = cursor.rowcount
+
+            # Masukkan akun-akun baru
+            for line in valid_lines:
+                await db.execute(
+                    "INSERT INTO product_accounts (product_id, account_data, is_sold) VALUES (?, ?, 0)",
+                    (product_id, line)
+                )
+
+            # Hitung total akun belum terjual
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM product_accounts WHERE product_id = ? AND is_sold = 0",
+                (product_id,)
+            )
+            row = await cursor.fetchone()
+            total_unsold = row[0] if row else 0
+
+            await db.execute(
+                "UPDATE products SET stock = ?, product_type = 'ACCOUNT' WHERE product_id = ?",
+                (total_unsold, product_id)
+            )
+            await db.commit()
+            logger.info("Replace akun produk %s: %d dihapus, %d dimasukkan.", product_id, deleted_count, len(valid_lines))
+            return deleted_count, len(valid_lines)
+
+    async def delete_specific_account(self, product_id: str, account_text: str) -> bool:
+        """
+        Menghapus 1 akun spesifik yang belum terjual (misal akun mati/rusak).
+        Otomatis menyinkronkan sisa stok produk.
+        """
+        clean_text = account_text.strip()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE;")
+            cursor = await db.execute(
+                """
+                DELETE FROM product_accounts
+                WHERE account_id IN (
+                    SELECT account_id FROM product_accounts
+                    WHERE product_id = ? AND is_sold = 0 AND account_data = ?
+                    LIMIT 1
+                )
+                """,
+                (product_id, clean_text)
+            )
+            deleted = cursor.rowcount > 0
+
+            if deleted:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM product_accounts WHERE product_id = ? AND is_sold = 0",
+                    (product_id,)
+                )
+                row = await cursor.fetchone()
+                total_unsold = row[0] if row else 0
+                await db.execute(
+                    "UPDATE products SET stock = ? WHERE product_id = ?",
+                    (total_unsold, product_id)
+                )
+
+            await db.commit()
+            return deleted
+
     async def delete_product(self, product_id: str) -> bool:
         """Menghapus produk dari database."""
         async with aiosqlite.connect(self.db_path) as db:

@@ -117,43 +117,101 @@ class RestockAccountModal(ui.Modal, title="Input Stok Akun"):
         )
 
 
+class ReplaceAccountModal(ui.Modal, title="Ganti Seluruh Stok Akun"):
+    accounts_input = ui.TextInput(
+        label="Daftar Akun Baru (1 Akun per Baris)",
+        style=discord.TextStyle.paragraph,
+        placeholder="Akun belum terjual lama akan dihapus dan diganti list ini.\nemail1:pass1\nemail2:pass2...",
+        required=True,
+        min_length=3,
+        max_length=4000
+    )
+
+    def __init__(self, db_manager, product_id: str, product_name: str):
+        super().__init__()
+        self.db = db_manager
+        self.product_id = product_id
+        self.product_name = product_name
+
+    async def on_submit(self, interaction: discord.Interaction):
+        lines = self.accounts_input.value.splitlines()
+        deleted_count, added_count = await self.db.replace_account_stock(self.product_id, lines)
+        await interaction.response.send_message(
+            f"🔄 **Stok Akun Berhasil Diganti!**\n"
+            f"• Produk: **{self.product_name}** (`{self.product_id}`)\n"
+            f"• Akun lama belum terjual yang dihapus: **{deleted_count} akun**\n"
+            f"• Akun baru yang dimasukkan: **{added_count} akun**\n"
+            f"📦 Total sisa stok sekarang: **{added_count} unit**.",
+            ephemeral=True
+        )
+
+
+class ClearAccountConfirmView(ui.View):
+    """View konfirmasi untuk mengosongkan sisa stok akun."""
+    def __init__(self, db_manager, product_id: str, product_name: str):
+        super().__init__(timeout=60)
+        self.db = db_manager
+        self.product_id = product_id
+        self.product_name = product_name
+
+    @ui.button(label="Ya, Kosongkan Akun Sisa", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def confirm_clear(self, interaction: discord.Interaction, button: ui.Button):
+        deleted = await self.db.clear_unsold_accounts(self.product_id)
+        await interaction.response.edit_message(
+            content=f"✅ Sebanyak **{deleted} akun** yang belum terjual pada **{self.product_name}** (`{self.product_id}`) telah berhasil dikosongkan. Sisa stok sekarang: **0 unit**.",
+            embed=None,
+            view=None
+        )
+
+    @ui.button(label="Batal", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_clear(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.delete_original_response()
+        except Exception:
+            pass
+
+
 # =============================================================================
-# VIEW DETAIL EDIT & HAPUS
+# VIEW DETAIL EDIT & HAPUS PRODUK
 # =============================================================================
 
-class ProductEditActionView(ui.View):
-    """View tombol aksi setelah admin memilih produk yang ingin diedit."""
+class AccountProductEditActionView(ui.View):
+    """View tombol aksi khusus untuk produk bertipe ACCOUNT."""
     def __init__(self, db_manager, product: Dict[str, Any]):
-        super().__init__(timeout=120)
+        super().__init__(timeout=180)
         self.db = db_manager
         self.product = product
 
-    @ui.button(label="Ubah Stok", style=discord.ButtonStyle.primary, emoji="📦")
-    async def edit_stock_btn(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_modal(
-            UpdateStockModal(self.db, self.product["product_id"], self.product["name"])
-        )
-
-    @ui.button(label="Ubah Harga", style=discord.ButtonStyle.success, emoji="💰")
-    async def edit_price_btn(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_modal(
-            UpdatePriceModal(self.db, self.product["product_id"], self.product["name"])
-        )
-
-    @ui.button(label="Input Akun", style=discord.ButtonStyle.secondary, emoji="📥")
+    @ui.button(label="Tambah Akun", style=discord.ButtonStyle.success, emoji="📥", row=0)
     async def restock_acc_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_modal(
             RestockAccountModal(self.db, self.product["product_id"], self.product["name"])
         )
 
-    @ui.button(label="Lihat Akun Sisa", style=discord.ButtonStyle.secondary, emoji="👁️")
+    @ui.button(label="Ganti Stok Akun", style=discord.ButtonStyle.primary, emoji="🔄", row=0)
+    async def replace_acc_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(
+            ReplaceAccountModal(self.db, self.product["product_id"], self.product["name"])
+        )
+
+    @ui.button(label="Kosongkan Akun", style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
+    async def clear_acc_btn(self, interaction: discord.Interaction, button: ui.Button):
+        unsold = await self.db.get_unsold_accounts_count(self.product["product_id"])
+        embed = discord.Embed(
+            title="⚠️ Konfirmasi Kosongkan Stok Akun",
+            description=(
+                f"Apakah Anda yakin ingin menghapus semua akun yang **belum terjual** pada produk **{self.product['name']}**?\n\n"
+                f"• Jumlah akun yang akan dihapus: **{unsold} akun**\n"
+                f"*(Akun yang sudah pernah laku dan riwayat pesanan pembeli TIDAK akan terhapus)*"
+            ),
+            color=discord.Color.red()
+        )
+        view = ClearAccountConfirmView(self.db, self.product["product_id"], self.product["name"])
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @ui.button(label="Unduh Akun Sisa", style=discord.ButtonStyle.secondary, emoji="👁️", row=1)
     async def view_acc_stock_btn(self, interaction: discord.Interaction, button: ui.Button):
-        prod_type = self.product.get("product_type", "FILE")
-        if prod_type != "ACCOUNT":
-            return await interaction.response.send_message(
-                f"ℹ️ Produk ini bertipe File Digital. Sisa stok: **{self.product['stock']} unit**.",
-                ephemeral=True
-            )
         details = await self.db.get_account_stock_details(self.product["product_id"])
         unsold_count = details["unsold_count"]
         sold_count = details["sold_count"]
@@ -184,8 +242,42 @@ class ProductEditActionView(ui.View):
             await interaction.response.send_message(embed=embed, file=discord_file, ephemeral=True)
         else:
             embed.description += "\n\n⚠️ Stok akun ini sedang habis (0 unit)."
-            embed.set_footer(text="Gunakan tombol Input Akun atau command /restock_accounts untuk mengisi stok.")
+            embed.set_footer(text="Gunakan tombol Tambah Akun atau command /restock_accounts untuk mengisi stok.")
             await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @ui.button(label="Ubah Harga", style=discord.ButtonStyle.secondary, emoji="💰", row=1)
+    async def edit_price_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(
+            UpdatePriceModal(self.db, self.product["product_id"], self.product["name"])
+        )
+
+    @ui.button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️", row=1)
+    async def close_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.delete_original_response()
+        except Exception:
+            pass
+
+
+class FileProductEditActionView(ui.View):
+    """View tombol aksi untuk produk bertipe FILE."""
+    def __init__(self, db_manager, product: Dict[str, Any]):
+        super().__init__(timeout=120)
+        self.db = db_manager
+        self.product = product
+
+    @ui.button(label="Ubah Stok", style=discord.ButtonStyle.primary, emoji="📦")
+    async def edit_stock_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(
+            UpdateStockModal(self.db, self.product["product_id"], self.product["name"])
+        )
+
+    @ui.button(label="Ubah Harga", style=discord.ButtonStyle.success, emoji="💰")
+    async def edit_price_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(
+            UpdatePriceModal(self.db, self.product["product_id"], self.product["name"])
+        )
 
     @ui.button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️")
     async def close_btn(self, interaction: discord.Interaction, button: ui.Button):
@@ -238,9 +330,13 @@ class SelectProductToEditDropdown(ui.Select):
         embed.add_field(name="Harga Saat Ini", value=f"Rp {product['price']:,}", inline=True)
         embed.add_field(name="Stok Saat Ini", value=f"{product['stock']} unit", inline=True)
         embed.add_field(name="File / Storage", value=f"`{Path(product['file_path']).name}`", inline=False)
-        embed.set_footer(text="Klik tombol di bawah untuk mengubah stok, harga, atau input akun.")
+        embed.set_footer(text="Klik tombol di bawah untuk mengelola stok, harga, atau akun.")
 
-        view = ProductEditActionView(self.db, product)
+        if prod_type == "ACCOUNT":
+            view = AccountProductEditActionView(self.db, product)
+        else:
+            view = FileProductEditActionView(self.db, product)
+
         await interaction.response.edit_message(embed=embed, view=view)
 
 

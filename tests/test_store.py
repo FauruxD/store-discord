@@ -186,6 +186,39 @@ async def run_tests():
     assert prod_acc_empty["stock"] == 0
     print(f"-> Pembelian sisa 3 akun sukses! Stok sekarang: {prod_acc_empty['stock']} unit")
 
+    print("\n=== [11] Pengujian Edit, Replace, Hapus Spesifik & Kosongkan Akun ===")
+    # 1. Tambah 3 akun baru
+    await db.add_account_stock("test_acc", ["accA:passA", "accB:passB", "accC:passC"])
+    stat1 = await db.get_account_stock_details("test_acc")
+    assert stat1["unsold_count"] == 3
+    print("-> 3 Akun awal diinput (A, B, C)")
+
+    # 2. Hapus 1 akun spesifik (misal accB rusak)
+    deleted_specific = await db.delete_specific_account("test_acc", "accB:passB")
+    assert deleted_specific is True
+    stat2 = await db.get_account_stock_details("test_acc")
+    assert stat2["unsold_count"] == 2
+    assert "accB:passB" not in stat2["unsold_accounts"]
+    print("-> Berhasil menghapus 1 akun spesifik (accB). Sisa stok: 2")
+
+    # 3. Replace seluruh sisa akun dengan kumpulan akun baru (X, Y, Z, W)
+    del_old, add_new = await db.replace_account_stock("test_acc", ["accX:1", "accY:2", "accZ:3", "accW:4"])
+    assert del_old == 2  # accA dan accC dihapus
+    assert add_new == 4  # X, Y, Z, W dimasukkan
+    stat3 = await db.get_account_stock_details("test_acc")
+    assert stat3["unsold_count"] == 4
+    print(f"-> Berhasil replace akun: {del_old} dihapus, {add_new} akun baru dimasukkan. Sisa stok: 4")
+
+    # 4. Kosongkan semua sisa akun (clear_unsold_accounts)
+    cleared = await db.clear_unsold_accounts("test_acc")
+    assert cleared == 4
+    stat4 = await db.get_account_stock_details("test_acc")
+    assert stat4["unsold_count"] == 0
+    assert stat4["sold_count"] == 5  # 5 akun yang terjual di step 10 tetap utuh!
+    prod_acc_cleared = await db.get_product("test_acc")
+    assert prod_acc_cleared["stock"] == 0
+    print(f"-> Berhasil kosongkan {cleared} akun belum terjual. Sisa stok: 0, Riwayat terjual: {stat4['sold_count']} (Aman)")
+
     # Cleanup file order test
     if delivered_file.exists():
         delivered_file.unlink()

@@ -242,7 +242,7 @@ class AdminCog(commands.Cog):
 
     @app_commands.command(
         name="set_stock",
-        description="[Admin] Perbarui jumlah stok produk secara cepat tanpa re-upload."
+        description="[Admin] Perbarui jumlah stok produk File secara cepat."
     )
     @app_commands.describe(
         product_id="ID produk yang ingin diubah stoknya",
@@ -250,11 +250,27 @@ class AdminCog(commands.Cog):
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def set_stock(self, interaction: discord.Interaction, product_id: str, stock: int):
-        """Memperbarui stok produk."""
+        """Memperbarui stok produk File."""
         if stock < 0:
             return await interaction.response.send_message("❌ Stok tidak boleh negatif!", ephemeral=True)
 
-        success = await self.bot.db.update_stock(product_id.lower().strip(), stock)
+        clean_id = product_id.lower().strip()
+        prod = await self.bot.db.get_product(clean_id)
+        if not prod:
+            return await interaction.response.send_message(f"❌ Produk `{product_id}` tidak ditemukan.", ephemeral=True)
+
+        if prod.get("product_type") == "ACCOUNT":
+            return await interaction.response.send_message(
+                "⚠️ **Produk ini bertipe Akun Digital!**\n"
+                "Stok produk akun dihitung otomatis dari jumlah akun yang ada di database.\n"
+                "• Untuk menambah stok akun: gunakan `/restock_accounts`\n"
+                "• Untuk mengganti semua akun sisa: gunakan `/replace_accounts`\n"
+                "• Untuk mengosongkan sisa akun: gunakan `/clear_account_stock`\n"
+                "• Atau buka menu `[✏️ Edit / Restock]` di `/setup_owner_panel`.",
+                ephemeral=True
+            )
+
+        success = await self.bot.db.update_stock(clean_id, stock)
         if success:
             await interaction.response.send_message(
                 f"✅ Stok produk `{product_id}` berhasil diperbarui menjadi **{stock}** unit.",
@@ -262,7 +278,122 @@ class AdminCog(commands.Cog):
             )
         else:
             await interaction.response.send_message(
-                f"❌ Produk dengan ID `{product_id}` tidak ditemukan.",
+                f"❌ Gagal memperbarui stok produk `{product_id}`.",
+                ephemeral=True
+            )
+
+    @app_commands.command(
+        name="replace_accounts",
+        description="[Admin] Ganti seluruh stok akun yang belum terjual dengan daftar akun baru."
+    )
+    @app_commands.describe(
+        product_id="ID produk akun yang ingin diganti stoknya",
+        file="[Opsional] Upload file .txt berisi daftar akun baru (1 akun per baris)",
+        accounts_text="[Opsional] Atau paste teks daftar akun baru di sini"
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def replace_accounts(
+        self,
+        interaction: discord.Interaction,
+        product_id: str,
+        file: Optional[discord.Attachment] = None,
+        accounts_text: Optional[str] = None
+    ):
+        """Mengganti seluruh akun yang belum terjual dengan daftar akun baru."""
+        clean_id = product_id.lower().strip()
+        prod = await self.bot.db.get_product(clean_id)
+        if not prod:
+            return await interaction.response.send_message(
+                f"❌ Produk `{product_id}` tidak ditemukan!", ephemeral=True
+            )
+
+        account_lines = []
+        if file is not None:
+            try:
+                raw_bytes = await file.read()
+                text_content = raw_bytes.decode("utf-8", errors="ignore")
+                account_lines = text_content.splitlines()
+            except Exception as e:
+                return await interaction.response.send_message(
+                    f"❌ Gagal membaca file attachment: {str(e)}", ephemeral=True
+                )
+        elif accounts_text:
+            account_lines = accounts_text.splitlines()
+        else:
+            return await interaction.response.send_message(
+                "⚠️ Harap upload file .txt baru atau masukkan teks akun pada parameter `accounts_text`!",
+                ephemeral=True
+            )
+
+        deleted_old, added_new = await self.bot.db.replace_account_stock(clean_id, account_lines)
+        embed = discord.Embed(
+            title="🔄 Stok Akun Berhasil Diganti!",
+            description=(
+                f"Stok akun belum terjual untuk **{prod['name']}** telah diperbarui.\n\n"
+                f"• Akun lama yang dihapus: **{deleted_old} akun**\n"
+                f"• Akun baru yang dimasukkan: **{added_new} akun**\n"
+                f"• Total sisa stok saat ini: **{added_new} unit**"
+            ),
+            color=discord.Color.green()
+        )
+        embed.set_footer(text="Akun yang sudah terjual sebelumnya tetap aman dan tidak terhapus.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="clear_account_stock",
+        description="[Admin] Hapus/kosongkan seluruh akun yang belum terjual (stok menjadi 0)."
+    )
+    @app_commands.describe(product_id="ID produk akun yang ingin dikosongkan sisa stoknya")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def clear_account_stock(self, interaction: discord.Interaction, product_id: str):
+        """Mengosongkan semua akun belum terjual untuk produk tertentu."""
+        clean_id = product_id.lower().strip()
+        prod = await self.bot.db.get_product(clean_id)
+        if not prod:
+            return await interaction.response.send_message(
+                f"❌ Produk `{product_id}` tidak ditemukan!", ephemeral=True
+            )
+
+        deleted = await self.bot.db.clear_unsold_accounts(clean_id)
+        embed = discord.Embed(
+            title="🗑️ Stok Akun Dikosongkan!",
+            description=(
+                f"Sebanyak **{deleted} akun** yang belum terjual pada produk **{prod['name']}** (`{clean_id}`) telah berhasil dihapus.\n\n"
+                f"• Sisa stok saat ini: **0 unit**\n"
+                f"*(Riwayat order dan akun pembeli sebelumnya tidak terpengaruh)*"
+            ),
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="delete_account",
+        description="[Admin] Hapus 1 baris akun spesifik yang belum terjual jika akun tersebut mati/rusak."
+    )
+    @app_commands.describe(
+        product_id="ID produk akun",
+        account_text="Teks akun yang ingin dihapus persis seperti yang diinput (misal user:pass)"
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def delete_account(self, interaction: discord.Interaction, product_id: str, account_text: str):
+        """Menghapus satu akun tertentu yang belum terjual."""
+        clean_id = product_id.lower().strip()
+        prod = await self.bot.db.get_product(clean_id)
+        if not prod:
+            return await interaction.response.send_message(f"❌ Produk `{product_id}` tidak ditemukan!", ephemeral=True)
+
+        deleted = await self.bot.db.delete_specific_account(clean_id, account_text)
+        if deleted:
+            updated_prod = await self.bot.db.get_product(clean_id)
+            new_stock = updated_prod["stock"] if updated_prod else 0
+            await interaction.response.send_message(
+                f"✅ Akun `{account_text.strip()}` berhasil dihapus dari produk **{prod['name']}**.\n"
+                f"📦 Sisa stok sekarang: **{new_stock} unit**.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"⚠️ Akun `{account_text.strip()}` tidak ditemukan dalam daftar akun yang belum terjual pada produk ini.",
                 ephemeral=True
             )
 
