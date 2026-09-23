@@ -30,6 +30,15 @@ async def run_tests():
     assert user["balance"] == 0, f"Saldo awal harus 0, didapat: {user['balance']}"
     print("-> User baru otomatis dibuat dengan saldo Rp 0.")
 
+    # Test set_balance
+    set_bal = await db.set_balance(test_user_id, 75000)
+    assert set_bal == 75000
+    assert await db.get_balance(test_user_id) == 75000
+    print(f"-> Berhasil set_balance manual: Rp {set_bal:,}")
+
+    # Kembalikan ke 0 untuk pengujian tiket deposit berikutnya
+    await db.set_balance(test_user_id, 0)
+
     print("\n=== [3] Pengujian Tiket Deposit & Approval Admin ===")
     dep_id = await db.create_deposit_request(test_user_id, 50000, "https://imgur.com/sample_proof")
     print(f"-> Tiket deposit dibuat: {dep_id}")

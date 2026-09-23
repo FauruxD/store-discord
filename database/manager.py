@@ -105,6 +105,21 @@ class DatabaseManager:
             row = await cursor.fetchone()
             return row[0] if row else 0
 
+    async def set_balance(self, user_id: int, new_balance: int) -> int:
+        """
+        Mengatur ulang (override) saldo pengguna ke nominal tertentu secara eksplisit.
+        """
+        if new_balance < 0:
+            new_balance = 0
+        await self.get_or_create_user(user_id)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET balance = ? WHERE user_id = ?",
+                (new_balance, user_id)
+            )
+            await db.commit()
+            return new_balance
+
     # =========================================================================
     # SISTEM DEPOSIT / TOP-UP
     # =========================================================================

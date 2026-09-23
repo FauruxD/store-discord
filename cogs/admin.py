@@ -732,5 +732,136 @@ class AdminCog(commands.Cog):
             ephemeral=True
         )
 
+    @app_commands.command(
+        name="set_balance",
+        description="[Admin] Atur (override) saldo pengguna ke nominal tertentu."
+    )
+    @app_commands.describe(
+        user="Pengguna Discord yang saldonya ingin diubah",
+        amount="Nominal saldo baru (Rp)"
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_balance(self, interaction: discord.Interaction, user: discord.User, amount: app_commands.Range[int, 0]):
+        """Mengatur saldo user secara manual."""
+        old_balance = await self.bot.db.get_balance(user.id)
+        new_balance = await self.bot.db.set_balance(user.id, amount)
+
+        embed = discord.Embed(
+            title="💰 Update Saldo Pengguna (Set Balance)",
+            description=(
+                f"Saldo pengguna {user.mention} (`{user.id}`) berhasil diatur ulang!\n\n"
+                f"• **Saldo Sebelumnya:** Rp {old_balance:,}\n"
+                f"• **Saldo Baru:** **Rp {new_balance:,}**\n"
+                f"• **Dieksekusi Oleh:** {interaction.user.mention}"
+            ),
+            color=discord.Color.green()
+        )
+        if user.display_avatar:
+            embed.set_thumbnail(url=user.display_avatar.url)
+        embed.set_footer(text="Admin Saldo Management • Automated Digital Store")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # Kirim notifikasi DM ke user
+        try:
+            dm_embed = discord.Embed(
+                title="💰 Informasi Penyesuaian Saldo",
+                description=(
+                    f"Halo **{user.name}**!\n"
+                    f"Saldo akun toko Anda telah disesuaikan oleh admin.\n\n"
+                    f"💰 **Saldo Terbaru Anda:** **Rp {new_balance:,}**\n"
+                    f"Selamat berbelanja di toko kami!"
+                ),
+                color=discord.Color.teal()
+            )
+            dm_embed.set_footer(text="Automated Digital Store • Notifikasi Saldo")
+            await user.send(embed=dm_embed)
+        except Exception:
+            pass
+
+        # Kirim log audit jika channel log tersedia
+        if config.DEPOSIT_LOG_CHANNEL_ID:
+            ch = self.bot.get_channel(config.DEPOSIT_LOG_CHANNEL_ID)
+            if ch:
+                log_embed = discord.Embed(
+                    title="📝 Audit Log: Set Balance Manual",
+                    description=(
+                        f"Admin {interaction.user.mention} mengatur ulang saldo pengguna {user.mention}.\n\n"
+                        f"• **Target User:** {user.mention} (`{user.id}`)\n"
+                        f"• **Saldo Lama:** Rp {old_balance:,}\n"
+                        f"• **Saldo Baru:** **Rp {new_balance:,}**"
+                    ),
+                    color=discord.Color.blue()
+                )
+                log_embed.set_footer(text="Audit Log Toko")
+                await ch.send(embed=log_embed)
+
+    @app_commands.command(
+        name="add_balance",
+        description="[Admin] Tambahkan atau kurangi saldo pengguna secara langsung."
+    )
+    @app_commands.describe(
+        user="Pengguna Discord yang saldonya ingin ditambah/dikurangi",
+        amount="Nominal yang ingin ditambahkan (gunakan angka minus untuk mengurangi, contoh: -5000)"
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def add_balance(self, interaction: discord.Interaction, user: discord.User, amount: int):
+        """Menambah atau mengurangi saldo user secara manual."""
+        old_balance = await self.bot.db.get_balance(user.id)
+        new_balance = await self.bot.db.add_balance(user.id, amount)
+
+        aksi = "Penambahan" if amount >= 0 else "Pengurangan"
+        embed = discord.Embed(
+            title=f"💰 {aksi} Saldo Pengguna",
+            description=(
+                f"Proses {aksi.lower()} saldo untuk {user.mention} (`{user.id}`) berhasil!\n\n"
+                f"• **Perubahan:** {'+' if amount >= 0 else ''}Rp {amount:,}\n"
+                f"• **Saldo Lama:** Rp {old_balance:,}\n"
+                f"• **Saldo Baru:** **Rp {new_balance:,}**\n"
+                f"• **Dieksekusi Oleh:** {interaction.user.mention}"
+            ),
+            color=discord.Color.green() if amount >= 0 else discord.Color.gold()
+        )
+        if user.display_avatar:
+            embed.set_thumbnail(url=user.display_avatar.url)
+        embed.set_footer(text="Admin Saldo Management • Automated Digital Store")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # Kirim notifikasi DM ke user
+        try:
+            dm_embed = discord.Embed(
+                title=f"💰 Informasi {aksi} Saldo",
+                description=(
+                    f"Halo **{user.name}**!\n"
+                    f"Saldo akun toko Anda telah disesuaikan oleh admin.\n\n"
+                    f"• **Perubahan:** {'+' if amount >= 0 else ''}Rp {amount:,}\n"
+                    f"💰 **Saldo Terbaru Anda:** **Rp {new_balance:,}**\n"
+                    f"Selamat berbelanja di toko kami!"
+                ),
+                color=discord.Color.teal()
+            )
+            dm_embed.set_footer(text="Automated Digital Store • Notifikasi Saldo")
+            await user.send(embed=dm_embed)
+        except Exception:
+            pass
+
+        # Kirim log audit jika channel log tersedia
+        if config.DEPOSIT_LOG_CHANNEL_ID:
+            ch = self.bot.get_channel(config.DEPOSIT_LOG_CHANNEL_ID)
+            if ch:
+                log_embed = discord.Embed(
+                    title=f"📝 Audit Log: {aksi} Balance Manual",
+                    description=(
+                        f"Admin {interaction.user.mention} melakukan {aksi.lower()} saldo untuk {user.mention}.\n\n"
+                        f"• **Target User:** {user.mention} (`{user.id}`)\n"
+                        f"• **Perubahan:** {'+' if amount >= 0 else ''}Rp {amount:,}\n"
+                        f"• **Saldo Baru:** **Rp {new_balance:,}**"
+                    ),
+                    color=discord.Color.blue()
+                )
+                log_embed.set_footer(text="Audit Log Toko")
+                await ch.send(embed=log_embed)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(AdminCog(bot))
