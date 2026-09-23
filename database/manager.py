@@ -194,6 +194,20 @@ class DatabaseManager:
             await db.commit()
             logger.info("Produk '%s' (%s) berhasil disimpan.", name, product_id)
 
+    async def delete_product(self, product_id: str) -> bool:
+        """Menghapus produk dari database."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("DELETE FROM products WHERE product_id = ?", (product_id,))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def update_stock(self, product_id: str, new_stock: int) -> bool:
+        """Memperbarui stok produk."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("UPDATE products SET stock = ? WHERE product_id = ?", (new_stock, product_id))
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def get_available_products(self) -> List[Dict[str, Any]]:
         """Mengambil seluruh daftar produk yang memiliki stok > 0."""
         async with aiosqlite.connect(self.db_path) as db:

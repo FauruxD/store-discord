@@ -89,6 +89,20 @@ async def run_tests():
     assert "sedang habis" in oos_msg
     print(f"-> Validasi stok habis berhasil dicegah: {oos_msg}")
 
+    print("\n=== [8] Pengujian Restock Produk ===")
+    restock_success = await db.update_stock("test_script", 15)
+    assert restock_success is True
+    prod_restocked = await db.get_product("test_script")
+    assert prod_restocked["stock"] == 15
+    print(f"-> Berhasil restock produk menjadi: {prod_restocked['stock']} unit")
+
+    print("\n=== [9] Pengujian Hapus Produk ===")
+    delete_success = await db.delete_product("test_script")
+    assert delete_success is True
+    prod_deleted = await db.get_product("test_script")
+    assert prod_deleted is None
+    print("-> Produk berhasil dihapus dari database.")
+
     # Cleanup
     if test_db_path.exists():
         test_db_path.unlink()

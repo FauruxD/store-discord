@@ -66,7 +66,8 @@ class AdminCog(commands.Cog):
         description="Deskripsi singkat produk",
         price="Harga produk dalam Rupiah",
         stock="Jumlah stok yang tersedia",
-        file_name="Nama file di folder assets/products/ (contoh: premium_script.lua)"
+        file="[Paling Mudah] Upload file produk langsung di Discord (.lua, .zip, .txt)",
+        file_name="[Opsional] Nama file yang sudah ada di folder assets/products/ di server"
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def add_product(
@@ -77,20 +78,41 @@ class AdminCog(commands.Cog):
         description: str,
         price: int,
         stock: int,
-        file_name: str
+        file: Optional[discord.Attachment] = None,
+        file_name: Optional[str] = None
     ):
-        """Mendaftarkan produk digital ke database."""
-        # Validasi file di folder assets/products
-        file_path = config.PRODUCTS_DIR / file_name
-        if not file_path.exists():
-            return await interaction.response.send_message(
-                f"⚠️ File `{file_name}` tidak ditemukan di folder `{config.PRODUCTS_DIR}`!\n"
-                f"Pastikan Anda telah meletakkan file tersebut sebelum menambahkan produk.",
-                ephemeral=True
-            )
-
+        """Mendaftarkan produk digital ke database dengan opsi upload file langsung."""
         if price < 0 or stock < 0:
             return await interaction.response.send_message("❌ Harga dan stok tidak boleh negatif!", ephemeral=True)
+
+        destination_path = None
+
+        # Jika admin mengunggah file attachment langsung di Discord
+        if file is not None:
+            config.PRODUCTS_DIR.mkdir(parents=True, exist_ok=True)
+            destination_path = config.PRODUCTS_DIR / file.filename
+            try:
+                await file.save(destination_path)
+                logger.info("File produk '%s' berhasil diunggah & disimpan ke %s", file.filename, destination_path)
+            except Exception as e:
+                logger.error("Gagal menyimpan file attachment: %s", str(e))
+                return await interaction.response.send_message(
+                    f"❌ Gagal menyimpan file produk yang diunggah: {str(e)}",
+                    ephemeral=True
+                )
+        elif file_name:
+            destination_path = config.PRODUCTS_DIR / file_name
+            if not destination_path.exists():
+                return await interaction.response.send_message(
+                    f"⚠️ File `{file_name}` tidak ditemukan di folder `{config.PRODUCTS_DIR}`!\n"
+                    f"Silakan gunakan parameter `file` untuk mengunggah file langsung dari Discord.",
+                    ephemeral=True
+                )
+        else:
+            return await interaction.response.send_message(
+                "⚠️ Harap lampirkan file produk melalui parameter `file` (upload langsung) atau sebutkan `file_name`!",
+                ephemeral=True
+            )
 
         await self.bot.db.add_or_update_product(
             product_id=product_id.lower().strip(),
@@ -98,7 +120,7 @@ class AdminCog(commands.Cog):
             description=description,
             price=price,
             stock=stock,
-            file_path=str(file_path)
+            file_path=str(destination_path)
         )
 
         embed = discord.Embed(
@@ -109,9 +131,56 @@ class AdminCog(commands.Cog):
         embed.add_field(name="Nama", value=name, inline=True)
         embed.add_field(name="Harga", value=f"Rp {price:,}", inline=True)
         embed.add_field(name="Stok", value=f"{stock} unit", inline=True)
-        embed.add_field(name="File Path", value=f"`{file_path.name}`", inline=False)
+        embed.add_field(name="File Produk", value=f"`{destination_path.name}`", inline=False)
+        embed.set_footer(text="Produk sekarang aktif dan siap dibeli di katalog!")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="set_stock",
+        description="[Admin] Perbarui jumlah stok produk secara cepat tanpa re-upload."
+    )
+    @app_commands.describe(
+        product_id="ID produk yang ingin diubah stoknya",
+        stock="Jumlah stok baru"
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_stock(self, interaction: discord.Interaction, product_id: str, stock: int):
+        """Memperbarui stok produk."""
+        if stock < 0:
+            return await interaction.response.send_message("❌ Stok tidak boleh negatif!", ephemeral=True)
+
+        success = await self.bot.db.update_stock(product_id.lower().strip(), stock)
+        if success:
+            await interaction.response.send_message(
+                f"✅ Stok produk `{product_id}` berhasil diperbarui menjadi **{stock}** unit.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"❌ Produk dengan ID `{product_id}` tidak ditemukan.",
+                ephemeral=True
+            )
+
+    @app_commands.command(
+        name="delete_product",
+        description="[Admin] Hapus produk dari katalog toko."
+    )
+    @app_commands.describe(product_id="ID produk yang ingin dihapus")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def delete_product(self, interaction: discord.Interaction, product_id: str):
+        """Menghapus produk dari katalog."""
+        success = await self.bot.db.delete_product(product_id.lower().strip())
+        if success:
+            await interaction.response.send_message(
+                f"✅ Produk dengan ID `{product_id}` berhasil dihapus dari katalog.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"❌ Produk dengan ID `{product_id}` tidak ditemukan di database.",
+                ephemeral=True
+            )
 
     @app_commands.command(
         name="add_balance",
