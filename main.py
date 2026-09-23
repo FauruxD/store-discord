@@ -59,7 +59,7 @@ class DiscordStoreBot(commands.Bot):
         self.add_view(OwnerAdminPanelView(self.db))
 
         # Muat modul ekstensi (Cogs)
-        cogs_list = ["cogs.admin", "cogs.store"]
+        cogs_list = ["cogs.admin", "cogs.store", "cogs.webhook"]
         for cog in cogs_list:
             try:
                 await self.load_extension(cog)

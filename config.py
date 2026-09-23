@@ -35,6 +35,11 @@ BANK_TRANSFER_INFO = os.getenv(
     "• Bank BCA: 123-456-7890 (A/N STORE)\n• DANA / GoPay: 0812-3456-7890\n• QRIS: Scan kode di atas"
 )
 
+# Integrasi Saweria QRIS Otomatis
+SAWERIA_URL = os.getenv("SAWERIA_URL", "https://saweria.co")
+WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", 8080))
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0")
+
 # Database
 DATABASE_PATH = BASE_DIR / os.getenv("DATABASE_PATH", "database/store.db")
 DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)

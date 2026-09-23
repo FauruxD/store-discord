@@ -11,18 +11,45 @@ logger = logging.getLogger("StoreBot.Views.Dashboard")
 class DepositInstructionsView(ui.View):
     """
     Sub-view ephemeral yang muncul saat user menekan tombol 'Deposit Saldo'.
-    Menyediakan tombol untuk memunculkan Modal Formulir Konfirmasi Deposit.
+    Menyediakan tombol untuk QRIS Otomatis (Saweria) dan Modal Formulir Manual.
     """
     def __init__(self, db_manager, instruction_interaction: discord.Interaction):
         super().__init__(timeout=180)
         self.db = db_manager
         self.instruction_interaction = instruction_interaction
 
-    @ui.button(label="Formulir Manual (Link/Teks)", style=discord.ButtonStyle.primary, emoji="📝")
+    @ui.button(label="QRIS Otomatis (Saweria)", style=discord.ButtonStyle.success, emoji="⚡", row=0)
+    async def saweria_qris_btn(self, interaction: discord.Interaction, button: ui.Button):
+        saweria_url = config.SAWERIA_URL
+        embed = discord.Embed(
+            title="⚡ Deposit Otomatis via QRIS Saweria (100% Instan)",
+            description=(
+                "Top-up saldo otomatis masuk detik itu juga tanpa perlu verifikasi admin:\n\n"
+                f"**1️⃣ Buka Halaman Saweria Toko:**\n"
+                f"👉 [**Klik di Sini untuk Membuka Saweria**]({saweria_url})\n\n"
+                "**2️⃣ Masukkan Nominal & ID Discord:**\n"
+                "• Masukkan nominal saldo yang ingin Anda top-up (min. Rp 1.000).\n"
+                "• **WAJIB:** Pada kolom **Pesan / Message** di Saweria, masukkan **ID Discord** Anda:\n"
+                f"```{interaction.user.id}```\n"
+                "*(Klik angka di atas untuk menyalin ID Discord Anda)*\n\n"
+                "**3️⃣ Bayar via QRIS:**\n"
+                "• Pilih metode pembayaran **QRIS** (bisa scan via DANA, GoPay, OVO, ShopeePay, BCA, dll).\n\n"
+                "**4️⃣ Selesai!**\n"
+                "Detik itu juga saldo akan otomatis masuk ke akun Discord Anda!"
+            ),
+            color=discord.Color.green()
+        )
+        embed.set_footer(text="Saldo otomatis masuk dalam 5-15 detik setelah QRIS berhasil dibayar.")
+
+        view = ui.View()
+        view.add_item(ui.Button(label="Buka Halaman Saweria", url=saweria_url, emoji="🔗"))
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @ui.button(label="Formulir Manual (Link/Teks)", style=discord.ButtonStyle.secondary, emoji="📝", row=0)
     async def open_modal_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_modal(DepositModal(self.db, instruction_interaction=self.instruction_interaction))
 
-    @ui.button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️")
+    @ui.button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️", row=0)
     async def close_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -73,24 +100,25 @@ class MainDashboardView(ui.View):
         custom_id="store_dashboard_deposit_btn"
     )
     async def deposit_button(self, interaction: discord.Interaction, button: ui.Button):
-        """Handler saat tombol 'Deposit' ditekan: menampilkan panduan transfer & QRIS statis."""
+        """Handler saat tombol 'Deposit' ditekan: menampilkan opsi QRIS instan & transfer manual."""
         embed = discord.Embed(
-            title="💳 Panduan & Rekening Deposit",
+            title="💳 Panduan & Metode Deposit Saldo",
             description=(
-                "Silakan lakukan pembayaran sesuai dengan nominal yang Anda inginkan menggunakan salah satu metode di bawah ini:\n\n"
-                f"{config.BANK_TRANSFER_INFO}\n\n"
-                "**📸 Cara Konfirmasi Deposit Praktis (Upload Foto Langsung):**\n"
-                "Ketik slash command di chat:\n"
-                "👉 `/deposit` lalu masukkan nominal & pilih foto screenshot bukti transfer langsung dari galeri HP / file PC Anda!\n"
-                "*(100% privat, foto Anda hanya dapat dilihat oleh Admin)*\n\n"
-                "**📝 Menggunakan Formulir Manual:**\n"
-                "Jika bukti transfer berupa link atau nama rekening pengirim, klik tombol **'Formulir Manual'** di bawah."
+                "Pilih salah satu metode deposit saldo di bawah ini:\n\n"
+                "⚡ **1. QRIS Otomatis (Saweria) - 100% INSTAN (Direkomendasikan)**\n"
+                "• Pembayaran langsung via scan QRIS (GoPay, DANA, OVO, ShopeePay, BCA, dll).\n"
+                "• Saldo otomatis masuk dalam beberapa detik tanpa perlu tunggu admin!\n"
+                "• Klik tombol **`[⚡ QRIS Otomatis (Saweria)]`** di bawah.\n\n"
+                "🏛️ **2. Transfer Manual (Bank & E-Wallet):**\n"
+                f"{config.BANK_TRANSFER_INFO}\n"
+                "• Konfirmasi via upload screenshot: ketik `/deposit` di chat.\n"
+                "• Konfirmasi via link: klik tombol **`[📝 Formulir Manual]`** di bawah."
             ),
             color=discord.Color.gold()
         )
         if config.QRIS_IMAGE_URL:
             embed.set_image(url=config.QRIS_IMAGE_URL)
-        embed.set_footer(text="Verifikasi manual oleh admin biasanya memakan waktu 1-10 menit.")
+        embed.set_footer(text="Deposit QRIS Otomatis 24/7 • Tanpa Biaya Tambahan")
 
         view = DepositInstructionsView(self.db, interaction)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)

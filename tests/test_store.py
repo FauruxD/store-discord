@@ -302,6 +302,101 @@ async def run_tests():
     assert rating_stat["average_rating"] == 5.0
     print(f"-> Statistik rating produk: ⭐ {rating_stat['average_rating']} ({rating_stat['total_reviews']} ulasan)")
 
+    print("\n=== [14] Pengujian Integrasi Saweria Webhook ===")
+    from cogs.webhook import WebhookCog
+    from aiohttp.test_utils import TestServer, TestClient
+
+    class MockUser:
+        def __init__(self, uid, name):
+            self.id = uid
+            self.name = name
+            self.dms_received = []
+
+        async def send(self, *args, **kwargs):
+            self.dms_received.append((args, kwargs))
+
+    class MockChannel:
+        def __init__(self):
+            self.messages = []
+
+        async def send(self, *args, **kwargs):
+            self.messages.append((args, kwargs))
+
+    mock_channel = MockChannel()
+    mock_customer = MockUser(test_user_id, "FauruxTester")
+
+    class MockDiscordBot:
+        def __init__(self, database):
+            self.db = database
+            self.user = MockUser(9999999999, "AutoStoreBot")
+
+        async def fetch_user(self, uid):
+            if uid == test_user_id:
+                return mock_customer
+            return None
+
+        def get_channel(self, cid):
+            return mock_channel
+
+    mock_bot = MockDiscordBot(db)
+    webhook_cog = WebhookCog(mock_bot)
+
+    client = TestClient(TestServer(webhook_cog.app))
+    await client.start_server()
+
+    # 1. Health check
+    resp = await client.get("/health")
+    assert resp.status == 200
+    health_data = await resp.json()
+    assert health_data["status"] == "online"
+    print("-> Health check endpoint responding 200 OK.")
+
+    # 2. Saweria notification with Discord User ID in message
+    bal_before = await db.get_balance(test_user_id)
+    saweria_payload = {
+        "amount_raw": 25000,
+        "donator_name": "Budi Santoso",
+        "message": f"Topup saldo store bot id {test_user_id} makasih min",
+        "id": "saweria-tx-12345"
+    }
+    resp = await client.post("/saweria-webhook", json=saweria_payload)
+    assert resp.status == 200
+    res_json = await resp.json()
+    assert res_json["status"] == "success"
+    assert res_json["amount"] == 25000
+    bal_after = await db.get_balance(test_user_id)
+    assert bal_after == bal_before + 25000
+    assert len(mock_customer.dms_received) > 0
+    print(f"-> Webhook Saweria dengan Discord ID berhasil: Saldo bertambah Rp 25,000 (Total: Rp {bal_after:,})")
+
+    # 3. Saweria notification with DEP ticket
+    dep_saweria = await db.create_deposit_request(test_user_id, 15000, "saweria_auto")
+    resp_ticket = await client.post("/saweria-webhook", json={
+        "amount_raw": 15000,
+        "donator_name": "Andi",
+        "message": f"Bayar deposit tiket {dep_saweria}",
+        "id": "saweria-tx-67890"
+    })
+    assert resp_ticket.status == 200
+    dep_checked = await db.get_deposit_request(dep_saweria)
+    assert dep_checked["status"] == "APPROVED"
+    print(f"-> Webhook Saweria dengan Tiket {dep_saweria} berhasil: Tiket ter-approve otomatis!")
+
+    # 4. Saweria notification without Discord ID (fallback safety)
+    resp_anon = await client.post("/saweria-webhook", json={
+        "amount_raw": 50000,
+        "donator_name": "Anonim Tanpa ID",
+        "message": "Semangat ya min!",
+        "id": "saweria-tx-99999"
+    })
+    assert resp_anon.status == 200
+    anon_json = await resp_anon.json()
+    assert anon_json["status"] == "received"
+    assert "warning" in anon_json
+    print("-> Webhook Saweria tanpa Discord ID ditangani dengan aman (status received, admin alerted).")
+
+    await client.close()
+
     # Cleanup file order test
     if delivered_file.exists():
         delivered_file.unlink()

@@ -665,6 +665,28 @@ class AdminCog(commands.Cog):
         )
 
     @app_commands.command(
+        name="setup_saweria",
+        description="[Admin] Konfigurasi URL Saweria untuk sistem deposit otomatis QRIS."
+    )
+    @app_commands.describe(url="Tautan halaman Saweria Anda, contoh: https://saweria.co/namatoko")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def setup_saweria(self, interaction: discord.Interaction, url: str):
+        """Mengatur URL halaman Saweria toko."""
+        clean_url = url.strip()
+        if not (clean_url.startswith("http://") or clean_url.startswith("https://")):
+            clean_url = f"https://{clean_url}"
+
+        config.SAWERIA_URL = clean_url
+        await interaction.response.send_message(
+            f"✅ URL Saweria berhasil diperbarui ke: **{clean_url}**!\n\n"
+            f"📌 **Langkah Konfigurasi Saweria:**\n"
+            f"1. Buka dashboard Saweria > menu **Integrasi Webhook**.\n"
+            f"2. Masukkan Webhook URL: `http://<IP_VPS_ANDA>:{config.WEBHOOK_PORT}/saweria-webhook`\n"
+            f"3. Simpan. Bot akan otomatis menambah saldo ketika pembeli mencantumkan ID Discord mereka di pesan donasi!",
+            ephemeral=True
+        )
+
+    @app_commands.command(
         name="setup_owner_panel",
         description="[Owner/Admin] Pasang panel khusus kontrol CRUD produk di channel ini."
     )
