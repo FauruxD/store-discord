@@ -189,7 +189,10 @@ local function handleMessage(raw_message)
                 if not isDuplicate(growid, count, valid_item_name) then
                     local total_wl = count * rate
                     print(string.format("[DONATION DETECTED] %s -> %d %s (=%d WL)", growid, count, valid_item_name, total_wl))
-                    notifyServer(growid, count, valid_item_name, total_wl)
+                    -- Jalankan pengiriman di background thread terpisah agar instan & tidak blocking
+                    runThread(function(g_id, c_count, i_name, wl_amount)
+                        notifyServer(g_id, c_count, i_name, wl_amount)
+                    end, growid, count, valid_item_name, total_wl)
                 end
             else
                 print("[DONATION IGNORED] Item '" .. tostring(raw_item) .. "' bukan WL/DL/BGL. Diabaikan.")
@@ -228,7 +231,7 @@ function on_stop(err)
 end
 
 -- ==============================================================================
--- MAIN LOOP (Tetap berada di World Deposit & Menjaga Koneksi)
+-- MAIN LOOP CEPAT & INSTAN (Tetap berada di World Deposit & Menjaga Koneksi)
 -- ==============================================================================
 while true do
     if bot.status == BotStatus.online then
@@ -240,14 +243,15 @@ while true do
             else
                 bot:warp(CONFIG.WORLD_NAME)
             end
-            sleep(4000)
+            sleep(3500)
         else
-            -- Bot sudah di world, dengarkan antrean event selama 5 detik
-            listenEvents(5)
+            -- Dengarkan event secara instan dan berkelanjutan
+            listenEvents(1)
         end
     else
         print("[INFO] Menunggu bot online...")
-        sleep(3000)
+        sleep(2000)
     end
-    sleep(500)
+    sleep(50)
 end
+
