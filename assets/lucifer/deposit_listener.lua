@@ -1,12 +1,13 @@
 -- ==============================================================================
--- LUCIFER LUA v2.86 - AUTOMATED DONATION BOX DEPOSIT LISTENER (ENHANCED V3)
+-- LUCIFER LUA v2.86 - AUTOMATED DONATION BOX DEPOSIT LISTENER (STABLE V4)
 -- ==============================================================================
 -- Script ini berjalan di executor Lucifer bot untuk mendeteksi deposit
 -- World Lock, Diamond Lock, dan Blue Gem Lock via Donation Box in-game Growtopia.
 -- Begitu lock masuk, bot akan langsung mengirimkan data ke Webhook Server Discord Store.
 -- ==============================================================================
 
-local CONFIG = {
+-- JADIKAN CONFIG GLOBAL agar tidak terjadi error: attempt to index a nil value (upvalue 'CONFIG')
+CONFIG = {
     -- Nama world tempat bot stand-by menjaga donation box
     WORLD_NAME = "MEKAYAM",
     
@@ -47,7 +48,7 @@ print("==================================================")
 -- Aktifkan auto reconnect bawaan Lucifer
 bot.auto_reconnect = true
 
--- Aktifkan console reader jika tersedia
+-- Aktifkan console reader jika didukung
 pcall(function()
     local c = getConsole()
     if c then
@@ -229,10 +230,8 @@ local function handleMessage(raw_message, source_tag)
             if not isDuplicate(growid, count, valid_item_name) then
                 local total_wl = count * rate
                 print(string.format(">>> [DONATION DETECTED] %s -> %d %s (=%d WL) <<<", growid, count, valid_item_name, total_wl))
-                -- Jalankan pengiriman di background thread terpisah agar instan & tidak blocking
-                runThread(function(g_id, c_count, i_name, wl_amount)
-                    notifyServer(g_id, c_count, i_name, wl_amount)
-                end, growid, count, valid_item_name, total_wl)
+                -- Eksekusi langsung pengiriman (HttpClient di Lucifer cepat dan tidak perlu thread terpisah)
+                notifyServer(growid, count, valid_item_name, total_wl)
             else
                 print("[DUPLICATE] Pesan donasi diabaikan karena baru saja diproses.")
             end
@@ -282,89 +281,7 @@ function on_stop(err)
 end
 
 -- ==============================================================================
--- 1. WATCHDOG THREAD (World Keeper)
--- ==============================================================================
-runThread(function()
-    while true do
-        sleep(3000)
-        local b = getBot()
-        if b and b.status == BotStatus.online then
-            if not b:isInWorld(CONFIG.WORLD_NAME) then
-                print("[WATCHDOG] Bot tidak berada di world " .. CONFIG.WORLD_NAME .. ". Melakukan warp...")
-                if CONFIG.DOOR_ID ~= "" then
-                    b:warp(CONFIG.WORLD_NAME, CONFIG.DOOR_ID)
-                else
-                    b:warp(CONFIG.WORLD_NAME)
-                end
-                sleep(4000)
-            end
-        end
-    end
-end)
-
--- ==============================================================================
--- 2. DEDICATED CONSOLE & HISTORY SCANNER THREAD (Berjalan Terus Setiap 250ms)
--- ==============================================================================
-runThread(function()
-    print("[THREAD] Dedicated Console & Log Scanner Aktif!")
-    local last_scanned_console = ""
-    local last_scanned_log = ""
-    local scanned_history_set = {}
-
-    while true do
-        sleep(250)
-
-        -- A. Pindai getConsole().contents
-        pcall(function()
-            local c = getConsole()
-            if c and c.contents and c.contents ~= "" and c.contents ~= last_scanned_console then
-                local full_text = c.contents
-                last_scanned_console = full_text
-                for line in string.gmatch(full_text, "[^\r\n]+") do
-                    local lower = string.lower(line)
-                    if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
-                        handleMessage(line, "Console")
-                    end
-                end
-            end
-        end)
-
-        -- B. Pindai getLog().content
-        pcall(function()
-            local l = getLog()
-            if l and l.content and l.content ~= "" and l.content ~= last_scanned_log then
-                local full_text = l.content
-                last_scanned_log = full_text
-                for line in string.gmatch(full_text, "[^\r\n]+") do
-                    local lower = string.lower(line)
-                    if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
-                        handleMessage(line, "Log")
-                    end
-                end
-            end
-        end)
-
-        -- C. Pindai bot.history
-        pcall(function()
-            local b = getBot()
-            if b and b.history then
-                for _, hist_entry in ipairs(b.history) do
-                    local h_str = tostring(hist_entry)
-                    if not scanned_history_set[h_str] then
-                        scanned_history_set[h_str] = true
-                        local lower = string.lower(h_str)
-                        if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
-                            handleMessage(h_str, "BotHistory")
-                        end
-                    end
-                end
-            end
-        end)
-    end
-end)
-
--- ==============================================================================
--- 3. MAIN LISTENER LOOP
+-- INITIAL SETUP & WARP
 -- ==============================================================================
 if not bot:isInWorld(CONFIG.WORLD_NAME) then
     print("[INFO] Bot belum berada di world " .. CONFIG.WORLD_NAME .. ". Memulai warp...")
@@ -378,12 +295,84 @@ end
 
 print("[INFO] Bot siap! Mendengarkan donation box di world " .. CONFIG.WORLD_NAME .. "...")
 
--- Loop utama: listenEvents dengan bounded interval 1 detik (tidak membekukan script)
+-- ==============================================================================
+-- UNIFIED MAIN LOOP (Watchdog + Event Listener + Console & Log Scanner)
+-- ==============================================================================
+-- Semua berjalan di thread utama sehingga BEBAS DARI ERROR upvalue / cross-thread!
+local last_warp_check = os.time()
+local last_scanned_console = ""
+local last_scanned_log = ""
+local scanned_history_set = {}
+
 while true do
+    local now = os.time()
+
+    -- 1. Watchdog: Pastikan bot selalu berada di world target setiap 5 detik
+    if now - last_warp_check >= 5 then
+        last_warp_check = now
+        if bot.status == BotStatus.online and not bot:isInWorld(CONFIG.WORLD_NAME) then
+            print("[WATCHDOG] Bot tidak berada di world " .. CONFIG.WORLD_NAME .. ". Melakukan warp...")
+            if CONFIG.DOOR_ID ~= "" then
+                bot:warp(CONFIG.WORLD_NAME, CONFIG.DOOR_ID)
+            else
+                bot:warp(CONFIG.WORLD_NAME)
+            end
+            sleep(3000)
+        end
+    end
+
+    -- 2. Pump Events (1 detik) - memanggil callback addEvent secara otomatis
     pcall(function()
         listenEvents(1)
     end)
-    sleep(100)
+
+    -- 3. Scan Console (getConsole)
+    pcall(function()
+        local c = getConsole()
+        if c and c.contents and c.contents ~= "" and c.contents ~= last_scanned_console then
+            local full_text = c.contents
+            last_scanned_console = full_text
+            for line in string.gmatch(full_text, "[^\r\n]+") do
+                local lower = string.lower(line)
+                if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
+                    handleMessage(line, "Console")
+                end
+            end
+        end
+    end)
+
+    -- 4. Scan Log (getLog)
+    pcall(function()
+        local l = getLog()
+        if l and l.content and l.content ~= "" and l.content ~= last_scanned_log then
+            local full_text = l.content
+            last_scanned_log = full_text
+            for line in string.gmatch(full_text, "[^\r\n]+") do
+                local lower = string.lower(line)
+                if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
+                    handleMessage(line, "Log")
+                end
+            end
+        end
+    end)
+
+    -- 5. Scan Bot History
+    pcall(function()
+        if bot and bot.history then
+            for _, hist_entry in ipairs(bot.history) do
+                local h_str = tostring(hist_entry)
+                if not scanned_history_set[h_str] then
+                    scanned_history_set[h_str] = true
+                    local lower = string.lower(h_str)
+                    if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
+                        handleMessage(h_str, "BotHistory")
+                    end
+                end
+            end
+        end
+    end)
+
+    sleep(50)
 end
 
 
