@@ -82,14 +82,23 @@ end
 
 -- Fungsi mem-parsing teks donasi dari Donation Box
 local function parseDonation(clean_text)
-    if not string.find(string.lower(clean_text), "deposited") then
+    local lower = string.lower(clean_text)
+    if not (string.find(lower, "places") or string.find(lower, "deposited")) then
         return nil, nil, nil
     end
 
-    -- Format Standar GT:
+    -- Format Standar Growtopia:
+    -- "[[FaruuXes places 1 World Lock into the Donation Box]]"
     -- "[Donation] UserGrowID deposited 2 Diamond Lock(s) into Donation Box."
-    -- "UserGrowID deposited 100 World Lock into the Donation Box."
-    local growid, count_str, item_name = string.match(clean_text, "([%w_]+)%s+deposited%s+(%d+)%s+(.-)%s+into")
+    local growid, count_str, item_name = string.match(clean_text, "([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into")
+
+    if not growid then
+        growid, count_str, item_name = string.match(clean_text, "([%w_]+)%s+deposited%s+(%d+)%s+(.-)%s+into")
+    end
+
+    if not growid then
+        growid, count_str, item_name = string.match(clean_text, "([%w_]+)%s+places%s+(%d+)%s+(.-)$")
+    end
 
     if not growid then
         growid, count_str, item_name = string.match(clean_text, "([%w_]+)%s+deposited%s+(%d+)%s+(.-)$")
@@ -151,9 +160,10 @@ local function handleMessage(raw_message)
 
     -- Gunakan fungsi bawaan Lucifer untuk menghapus format warna Growtopia
     local clean = removeColor(raw_message)
+    local lower = string.lower(clean)
 
-    -- Cek apakah pesan berkaitan dengan donasi box
-    if string.find(string.lower(clean), "deposited") and string.find(string.lower(clean), "donation") then
+    -- Cek apakah pesan berkaitan dengan donasi box (bisa 'places' atau 'deposited')
+    if (string.find(lower, "places") or string.find(lower, "deposited")) and string.find(lower, "donation box") then
         local growid, count, raw_item = parseDonation(clean)
         if growid and count and raw_item then
             local rate, valid_item_name = getItemRate(raw_item)
