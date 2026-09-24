@@ -163,19 +163,23 @@ end
 -- Dengan cara ini, thread event listener instan kembali (< 0.1ms) dan TIDAK AKAN PERNAH melewatkan deposit cepat!
 local function notifyServer(growid, count, item_name, amount_wl)
     runThread(function(api_url, secret_token, discord_webhook, world_name, enable_msg, g_id, c_count, i_name, wl_amount)
-        -- 1. Backup: Kirim notifikasi langsung via Discord Webhook jika ada (FORMAT EMBED)
+        -- 1. Backup: Kirim notifikasi langsung via Discord Webhook jika ada (FORMAT EMBED VIA HTTP JSON)
+        -- Menggunakan HttpClient murni agar 100% aman dan tidak menyebabkan executor crash!
         if discord_webhook and discord_webhook ~= "" then
             pcall(function()
-                local hook = Webhook.new(discord_webhook)
-                hook.username = "Lucifer GT Deposit"
-                hook.embed1.use = true
-                hook.embed1.title = "🎉 Deposit Terdeteksi!"
-                hook.embed1.color = 3066993 -- Hijau Emerald (0x2ECC71)
-                hook.embed1:addField("👤 GrowID", "`" .. g_id .. "`", true)
-                hook.embed1:addField("📦 Item", string.format("**%d %s** (+%d WL)", c_count, i_name, wl_amount), true)
-                hook.embed1:addField("🌍 World", "`" .. world_name .. "`", true)
-                hook.embed1.footer = "Lucifer GT Listener • Donation Box Auto Deposit"
-                hook:send()
+                local hook_client = HttpClient.new()
+                hook_client.url = discord_webhook
+                hook_client:setMethod(Method.post)
+                hook_client.headers["Content-Type"] = "application/json"
+                hook_client.headers["User-Agent"] = "Mozilla/5.0"
+
+                local hook_payload = string.format(
+                    '{"username":"Lucifer GT Deposit","embeds":[{"title":"🎉 Deposit Terdeteksi!","color":3066993,"fields":[{"name":"👤 GrowID","value":"`%s`","inline":true},{"name":"📦 Item","value":"**%d %s** (+%d WL)","inline":true},{"name":"🌍 World","value":"`%s`","inline":true}],"footer":{"text":"Lucifer GT Listener • Donation Box Auto Deposit"}}]}',
+                    g_id, c_count, i_name, wl_amount, world_name
+                )
+                hook_client.content = hook_payload
+                hook_client.timeout = 5
+                hook_client:request()
             end)
         end
 
