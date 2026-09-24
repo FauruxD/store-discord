@@ -8,23 +8,22 @@
 
 local CONFIG = {
     -- Nama world tempat bot stand-by menjaga donation box
-    WORLD_NAME = "STOREDEP",
+    WORLD_NAME = "MEKAYAM",
     
     -- Door ID jika donation box berada di dalam pintu khusus (kosongkan jika tidak ada)
     DOOR_ID = "",
 
-    -- URL Webhook Server Bot Discord (sesuaikan dengan domain / IP VPS kamu)
-    -- Contoh: "http://127.0.0.1:8080/gt-deposit" atau "http://discord.faru.web.id:8080/gt-deposit"
-    API_URL = "http://127.0.0.1:8080/gt-deposit",
+    -- URL Webhook Server Bot Discord (Gunakan HTTPS standar tanpa port :8080)
+    API_URL = "https://discord.faru.web.id/gt-deposit",
 
     -- Token rahasia yang sama dengan GROWTOPIA_SECRET_TOKEN di file .env Discord Bot
-    SECRET_TOKEN = "lucifer-secret-token-change-me",
+    SECRET_TOKEN = "3212382761832",
 
     -- Apakah bot membalas via /msg privat in-game ke donatur setelah deposit diterima
     ENABLE_INGAME_MSG = true,
 
     -- (Opsional) Discord Webhook langsung untuk backup notifikasi ke channel Discord
-    DISCORD_WEBHOOK_URL = ""
+    DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1552573711763120170/dN5tqH9OoQpynprLa3JHjbASqsh8v3MX-wbWYClmKGQuJP1mSEyI3WbDXHetbYzILoWN"
 }
 
 -- Inisialisasi Bot
@@ -118,10 +117,22 @@ end
 
 -- Fungsi mengirim data deposit ke Webhook Server Bot Discord
 local function notifyServer(growid, count, item_name, amount_wl)
+    -- 1. Backup: Kirim notifikasi langsung via Discord Webhook jika ada
+    if CONFIG.DISCORD_WEBHOOK_URL and CONFIG.DISCORD_WEBHOOK_URL ~= "" then
+        pcall(function()
+            local hook = Webhook.new(CONFIG.DISCORD_WEBHOOK_URL)
+            hook.username = "Lucifer GT Deposit"
+            hook.content = string.format("🎉 **Deposit Terdeteksi!**\n👤 GrowID: **`%s`**\n📦 Item: **%d %s** (+%d WL)\n🌍 World: **`%s`**", growid, count, item_name, amount_wl, CONFIG.WORLD_NAME)
+            hook:send()
+        end)
+    end
+
+    -- 2. Kirim ke Server Bot Discord API
     local client = HttpClient.new()
     client.url = CONFIG.API_URL
     client:setMethod(Method.post)
     client.headers["Content-Type"] = "application/json"
+    client.headers["User-Agent"] = "Mozilla/5.0"
     client.headers["X-GT-Token"] = CONFIG.SECRET_TOKEN
 
     local payload = string.format(
@@ -131,6 +142,7 @@ local function notifyServer(growid, count, item_name, amount_wl)
     client.content = payload
     client.timeout = 8
 
+    print("[HTTP] Mengirim deposit ke: " .. CONFIG.API_URL)
     local result = client:request()
     if result.error == 0 and result.status == 200 then
         print(string.format("[SUCCESS] Terverifikasi: %s mendepositkan %d %s (+%d WL)", growid, count, item_name, amount_wl))
@@ -147,7 +159,7 @@ local function notifyServer(growid, count, item_name, amount_wl)
         end
         return true
     else
-        print(string.format("[ERROR] Gagal mengirim deposit ke server. Status: %s, Error: %s", tostring(result.status), tostring(result.error)))
+        print(string.format("[ERROR] Gagal mengirim deposit ke server. Status: %s, Error: %s, Body: %s", tostring(result.status), tostring(result.error), tostring(result.body)))
         return false
     end
 end
@@ -161,6 +173,11 @@ local function handleMessage(raw_message)
     -- Gunakan fungsi bawaan Lucifer untuk menghapus format warna Growtopia
     local clean = removeColor(raw_message)
     local lower = string.lower(clean)
+
+    -- Debug log saat mendeteksi kata kunci donasi
+    if string.find(lower, "donation box") or string.find(lower, "places") or string.find(lower, "deposited") then
+        print("[MATCHING LOG] " .. clean)
+    end
 
     -- Cek apakah pesan berkaitan dengan donasi box (bisa 'places' atau 'deposited')
     if (string.find(lower, "places") or string.find(lower, "deposited")) and string.find(lower, "donation box") then
@@ -186,6 +203,11 @@ addEvent(Event.game_message, function(msg)
     handleMessage(msg)
 end)
 
+-- Daftarkan event generic_text
+addEvent(Event.generic_text, function(text)
+    handleMessage(text)
+end)
+
 -- Daftarkan event variantlist (OnConsoleMessage & OnTalkBubble)
 addEvent(Event.variantlist, function(varlist, net_id)
     if varlist[1] == "OnConsoleMessage" and varlist[2] then
@@ -194,6 +216,7 @@ addEvent(Event.variantlist, function(varlist, net_id)
         handleMessage(varlist[3])
     end
 end)
+
 
 -- Callback saat script dihentikan
 function on_stop(err)
