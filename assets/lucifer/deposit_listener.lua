@@ -170,18 +170,15 @@ local function handleMessage(raw_message)
         return
     end
 
-    -- Gunakan fungsi bawaan Lucifer untuk menghapus format warna Growtopia
-    local clean = removeColor(raw_message)
+    local clean = removeColor(tostring(raw_message))
     local lower = string.lower(clean)
 
-    -- Cetak ke konsol Lucifer jika mendeteksi teks berkaitan dengan game/donasi
+    -- Cetak ke konsol Lucifer jika mendeteksi teks berkaitan dengan places / donasi
     if string.find(lower, "places") or string.find(lower, "donation box") or string.find(lower, "deposited") then
         print("[MATCHING LOG] " .. clean)
-    end
-
-    -- Cek apakah pesan berkaitan dengan donasi box
-    if (string.find(lower, "places") or string.find(lower, "deposited")) and string.find(lower, "donation box") then
         local growid, count, raw_item = parseDonation(clean)
+        print(string.format("[PARSED] GrowID: %s, Count: %s, Item: %s", tostring(growid), tostring(count), tostring(raw_item)))
+        
         if growid and count and raw_item then
             local rate, valid_item_name = getItemRate(raw_item)
             if rate > 0 and valid_item_name then
@@ -201,32 +198,39 @@ local function handleMessage(raw_message)
     end
 end
 
--- Daftarkan event game_message
+-- 1. Daftarkan event game_message
 addEvent(Event.game_message, function(msg)
     handleMessage(msg)
 end)
 
--- Daftarkan event generic_text
+-- 2. Daftarkan event generic_text
 addEvent(Event.generic_text, function(text)
     handleMessage(text)
 end)
 
--- Daftarkan event variantlist (OnConsoleMessage & OnTalkBubble)
+-- 3. Daftarkan event variantlist (OnConsoleMessage & OnTalkBubble)
 addEvent(Event.variantlist, function(varlist, net_id)
-    if type(varlist) == "table" then
-        if varlist[1] == "OnConsoleMessage" and varlist[2] then
-            handleMessage(varlist[2])
-        elseif varlist[1] == "OnTalkBubble" and varlist[3] then
-            handleMessage(varlist[3])
+    pcall(function()
+        local v1 = tostring(varlist[1] or "")
+        local v2 = tostring(varlist[2] or "")
+        if v1 == "OnConsoleMessage" then
+            handleMessage(v2)
+        elseif v1 == "OnTalkBubble" then
+            handleMessage(tostring(varlist[3] or ""))
         else
-            -- Cek semua elemen di varlist
-            for _, val in pairs(varlist) do
-                if type(val) == "string" and (string.find(string.lower(val), "places") or string.find(string.lower(val), "donation box")) then
-                    handleMessage(val)
-                end
-            end
+            -- Cek jika ada teks di v1 atau v2
+            handleMessage(v1)
+            handleMessage(v2)
         end
-    end
+    end)
+    -- Fallback 0-indexed jika variantlist berbasis 0
+    pcall(function()
+        local v0 = tostring(varlist[0] or "")
+        local v1 = tostring(varlist[1] or "")
+        if v0 == "OnConsoleMessage" then
+            handleMessage(v1)
+        end
+    end)
 end)
 
 -- Callback saat script dihentikan
@@ -239,13 +243,15 @@ function on_stop(err)
 end
 
 -- ==============================================================================
--- 1. WATCHDOG THREAD (Memastikan Bot Selalu di World Deposit)
+-- 1. WATCHDOG THREAD (World Keeper & Backup Console Scanner)
 -- ==============================================================================
 runThread(function()
+    local last_seen_text = ""
     while true do
-        sleep(4000)
+        sleep(2500)
         local b = getBot()
         if b and b.status == BotStatus.online then
+            -- A. Pastikan selalu di world deposit
             if not b:isInWorld(CONFIG.WORLD_NAME) then
                 print("[WATCHDOG] Bot tidak berada di world " .. CONFIG.WORLD_NAME .. ". Melakukan warp...")
                 if CONFIG.DOOR_ID ~= "" then
@@ -255,14 +261,27 @@ runThread(function()
                 end
                 sleep(4000)
             end
+
+            -- B. Backup Scanner: Baca Console Log bot secara berkala
+            pcall(function()
+                local c = b:getConsole()
+                if c and c.contents and c.contents ~= last_seen_text then
+                    last_seen_text = c.contents
+                    for line in string.gmatch(c.contents, "[^\r\n]+") do
+                        local l_lower = string.lower(line)
+                        if (string.find(l_lower, "places") or string.find(l_lower, "deposited")) and string.find(l_lower, "donation box") then
+                            handleMessage(line)
+                        end
+                    end
+                end
+            end)
         end
     end
 end)
 
 -- ==============================================================================
--- 2. MAIN LISTENER (Dengarkan Event Terus Menerus Tanpa Timeout Cepat)
+-- 2. MAIN LISTENER (Dengarkan Event Terus Menerus)
 -- ==============================================================================
--- Cek posisi awal bot
 if not bot:isInWorld(CONFIG.WORLD_NAME) then
     print("[INFO] Bot belum berada di world " .. CONFIG.WORLD_NAME .. ". Memulai warp...")
     if CONFIG.DOOR_ID ~= "" then
@@ -275,13 +294,14 @@ end
 
 print("[INFO] Bot siap! Mendengarkan donation box di world " .. CONFIG.WORLD_NAME .. "...")
 
--- Loop utama mendengarkan event dengan durasi panjang agar tidak keluar/crash
+-- Loop utama mendengarkan event dengan durasi panjang
 while true do
     pcall(function()
         listenEvents(3600)
     end)
     sleep(500)
 end
+
 
 
 
