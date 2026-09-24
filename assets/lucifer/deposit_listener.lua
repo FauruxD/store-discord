@@ -95,16 +95,22 @@ end
 
 -- Fungsi mem-parsing teks donasi dari berbagai format Growtopia
 local function parseDonation(raw_text)
-    -- 1. Hapus kode warna Growtopia (seperti `2, `0, dll)
-    local clean = removeColor(tostring(raw_text))
+    local raw_str = tostring(raw_text)
 
-    -- 2. Hapus timestamp [04:03:02] atau sejenisnya jika ada
+    -- 1. Hapus kode warna bawaan Lucifer jika ada
+    local clean = removeColor(raw_str)
+
+    -- 2. Hapus semua backtick color code Growtopia (`0, `1, `2, `w, `b, `p, `c, `^, dll)
+    clean = string.gsub(clean, "`.", "")
+    clean = string.gsub(clean, "`", "")
+
+    -- 3. Hapus timestamp [04:03:02] atau sejenisnya jika ada
     clean = string.gsub(clean, "%[%d+:%d+:%d+%]", "")
 
-    -- 3. Hapus kurung siku [ dan ]
+    -- 4. Hapus kurung siku [ dan ]
     clean = string.gsub(clean, "[%[%]]", "")
 
-    -- 4. Trim whitespace
+    -- 5. Trim whitespace luar
     clean = string.gsub(clean, "^%s*(.-)%s*$", "%1")
 
     local lower = string.lower(clean)
@@ -243,11 +249,17 @@ end
 
 -- 1. Daftarkan event game_message
 addEvent(Event.game_message, function(msg)
+    if CONFIG.DEBUG_MODE then
+        print("[RAW game_message] " .. tostring(msg))
+    end
     handleMessage(msg, "game_message")
 end)
 
 -- 2. Daftarkan event generic_text
 addEvent(Event.generic_text, function(text)
+    if CONFIG.DEBUG_MODE then
+        print("[RAW generic_text] " .. tostring(text))
+    end
     handleMessage(text, "generic_text")
 end)
 
@@ -259,6 +271,10 @@ addEvent(Event.variantlist, function(varlist, net_id)
         local v2 = tostring(varlist[2] or "")
         local v3 = tostring(varlist[3] or "")
 
+        if CONFIG.DEBUG_MODE then
+            print(string.format("[RAW variantlist netid=%s] v0=%s | v1=%s | v2=%s", tostring(net_id), v0, v1, v2))
+        end
+
         if v0 == "OnConsoleMessage" then
             handleMessage(v1, "OnConsoleMessage")
         elseif v1 == "OnConsoleMessage" then
@@ -267,6 +283,19 @@ addEvent(Event.variantlist, function(varlist, net_id)
             handleMessage(v2, "OnTalkBubble")
         elseif v1 == "OnTalkBubble" then
             handleMessage(v3, "OnTalkBubble")
+        end
+    end)
+    -- Fallback sol2 userdata: varlist:get(0)
+    pcall(function()
+        if varlist.get then
+            local g0 = varlist:get(0):getString()
+            if g0 == "OnConsoleMessage" then
+                local g1 = varlist:get(1):getString()
+                if CONFIG.DEBUG_MODE then
+                    print("[RAW varlist:get] OnConsoleMessage: " .. tostring(g1))
+                end
+                handleMessage(g1, "OnConsoleMessage")
+            end
         end
     end)
 end)
@@ -295,17 +324,36 @@ end
 
 print("[INFO] Bot siap! Mendengarkan donation box di world " .. CONFIG.WORLD_NAME .. "...")
 
+-- Cetak status diagnostik awal
+pcall(function()
+    local c = getConsole()
+    print("[DIAGNOSTIC] getConsole(): " .. (c and "AVAILABLE" or "NIL") .. " | Content length: " .. (c and string.len(c.contents or "") or "0"))
+    local l = getLog()
+    print("[DIAGNOSTIC] getLog(): " .. (l and "AVAILABLE" or "NIL") .. " | Content length: " .. (l and string.len(l.content or "") or "0"))
+    print("[DIAGNOSTIC] bot.history: " .. (bot.history and tostring(#bot.history) or "NIL"))
+end)
+
 -- ==============================================================================
 -- UNIFIED MAIN LOOP (Watchdog + Event Listener + Console & Log Scanner)
 -- ==============================================================================
 -- Semua berjalan di thread utama sehingga BEBAS DARI ERROR upvalue / cross-thread!
 local last_warp_check = os.time()
+local last_heartbeat = os.time()
 local last_scanned_console = ""
 local last_scanned_log = ""
 local scanned_history_set = {}
 
 while true do
     local now = os.time()
+
+    -- Cetak detak jantung setiap 10 detik agar terlihat aktif di console Lucifer
+    if now - last_heartbeat >= 10 then
+        last_heartbeat = now
+        if CONFIG.DEBUG_MODE then
+            local w_name = bot:getWorld() and bot:getWorld().name or "Unknown"
+            print(string.format("[HEARTBEAT] Bot %s aktif menjaga world %s", bot.name, w_name))
+        end
+    end
 
     -- 1. Watchdog: Pastikan bot selalu berada di world target setiap 5 detik
     if now - last_warp_check >= 5 then
