@@ -97,6 +97,11 @@ end
 local function parseDonation(raw_text)
     local raw_str = tostring(raw_text)
 
+    -- [SECURITY 1] Tolak jika teks mengandung tanda chat pemain (<GrowID>, : bicara, **, dll)
+    if string.find(raw_str, "<") or string.find(raw_str, ">") or string.find(raw_str, ":%s") or string.find(raw_str, "%*%*") then
+        return nil, nil, nil, raw_str
+    end
+
     -- 1. Hapus kode warna bawaan Lucifer jika ada
     local clean = removeColor(raw_str)
 
@@ -104,59 +109,47 @@ local function parseDonation(raw_text)
     clean = string.gsub(clean, "`.", "")
     clean = string.gsub(clean, "`", "")
 
-    -- 3. Hapus timestamp [04:03:02] atau sejenisnya jika ada
-    clean = string.gsub(clean, "%[%d+:%d+:%d+%]", "")
-
-    -- 4. Hapus kurung siku [ dan ]
-    clean = string.gsub(clean, "[%[%]]", "")
-
-    -- 5. Trim whitespace luar
+    -- 3. Hapus timestamp [04:03:02] di awal teks jika ada
+    clean = string.gsub(clean, "^%[%d+:%d+:%d+%]%s*", "")
     clean = string.gsub(clean, "^%s*(.-)%s*$", "%1")
 
     local lower = string.lower(clean)
 
-    -- Cek kata kunci donasi
-    if not (string.find(lower, "donat") or string.find(lower, "place") or string.find(lower, "deposit")) then
+    -- [SECURITY 2] Cek kata kunci wajib donasi
+    if not (string.find(lower, "donation box") or string.find(lower, "display box") or string.find(lower, "has donated")) then
         return nil, nil, nil, clean
     end
 
     local growid, count_str, item_name = nil, nil, nil
 
-    -- Format 1 (Standar Donation Box GT):
-    -- "FaruuXes places 193 World Lock into the Donation Box"
-    -- "FaruuXes places 1 World Lock into the Display Box"
-    growid, count_str, item_name = string.match(clean, "([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into")
+    -- [SECURITY 3] Format 1 (Standar Sistem Growtopia Resmi):
+    -- Pesan sistem GT WAJIB diawali kurung siku ganda [[ dan diakhiri into the Donation/Display Box]]
+    -- Contoh: "[[FaruuXes places 193 World Lock into the Donation Box]]"
+    growid, count_str, item_name = string.match(clean, "^%[%[([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into the Donation Box%]%]$")
 
-    -- Format 2 (Standar Alternatif GT):
-    -- "FaruuXes has donated 1 World Lock."
-    -- "FaruuXes has donated 5 Diamond Locks."
     if not growid then
-        growid, count_str, item_name = string.match(clean, "([%w_]+)%s+has%s+donated%s+(%d+)%s+(.-)%.?$")
+        growid, count_str, item_name = string.match(clean, "^%[%[([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into the Display Box%]%]$")
     end
 
-    -- Format 3:
-    -- "FaruuXes deposited 1 World Lock into Donation Box"
+    -- Format 2 (Standar Sistem Alternatif Resmi GT):
+    -- Contoh: "FaruuXes has donated 1 World Lock."
     if not growid then
-        growid, count_str, item_name = string.match(clean, "([%w_]+)%s+deposited%s+(%d+)%s+(.-)%s+into")
-    end
-
-    -- Format 4 (Variasi bebas):
-    if not growid then
-        growid, count_str, item_name = string.match(clean, "([%w_]+)%s+donated%s+(%d+)%s+(.-)%.?$")
-    end
-
-    if not growid then
-        growid, count_str, item_name = string.match(clean, "([%w_]+)%s+places%s+(%d+)%s+(.-)$")
+        growid, count_str, item_name = string.match(clean, "^([%w_]+)%s+has%s+donated%s+(%d+)%s+(.-)%.$")
     end
 
     if growid and count_str and item_name then
         local count = tonumber(count_str)
-        -- Bersihkan nama item dari kurung (s), titik, atau spasi berlebih
-        item_name = string.gsub(item_name, "%(s%)", "")
-        item_name = string.gsub(item_name, "%.+$", "")
-        item_name = string.gsub(item_name, "^%s*(.-)%s*$", "%1")
+        if count and count > 0 then
+            item_name = string.gsub(item_name, "%(s%)", "")
+            item_name = string.gsub(item_name, "%.+$", "")
+            item_name = string.gsub(item_name, "^%s*(.-)%s*$", "%1")
 
-        return growid, count, item_name, clean
+            -- [SECURITY 4] Validasi ketat nama item hanya Lock yang didukung
+            local rate, valid_item_name = getItemRate(item_name)
+            if rate > 0 and valid_item_name then
+                return growid, count, valid_item_name, clean
+            end
+        end
     end
 
     return nil, nil, nil, clean
@@ -228,15 +221,15 @@ local function handleMessage(raw_message, source_tag)
         end
     end
 
-    -- Jika donasi terdeteksi
+    -- Jika donasi terverifikasi sah
     if growid and count and raw_item then
         local rate, valid_item_name = getItemRate(raw_item)
         if rate > 0 and valid_item_name then
             -- Cegah pemrosesan ganda
             if not isDuplicate(growid, count, valid_item_name) then
                 local total_wl = count * rate
-                print(string.format(">>> [DONATION DETECTED] %s -> %d %s (=%d WL) <<<", growid, count, valid_item_name, total_wl))
-                -- Eksekusi langsung pengiriman (HttpClient di Lucifer cepat dan tidak perlu thread terpisah)
+                print(string.format(">>> [AUTHENTIC DONATION DETECTED] %s -> %d %s (=%d WL) <<<", growid, count, valid_item_name, total_wl))
+                -- Eksekusi langsung pengiriman
                 notifyServer(growid, count, valid_item_name, total_wl)
             else
                 print("[DUPLICATE] Pesan donasi diabaikan karena baru saja diproses.")
@@ -247,7 +240,7 @@ local function handleMessage(raw_message, source_tag)
     end
 end
 
--- 1. Daftarkan event game_message
+-- 1. Daftarkan event game_message (Pesan sistem server)
 addEvent(Event.game_message, function(msg)
     if CONFIG.DEBUG_MODE then
         print("[RAW game_message] " .. tostring(msg))
@@ -263,26 +256,23 @@ addEvent(Event.generic_text, function(text)
     handleMessage(text, "generic_text")
 end)
 
--- 3. Daftarkan event variantlist (OnConsoleMessage & OnTalkBubble)
+-- 3. Daftarkan event variantlist (HANYA OnConsoleMessage)
+-- [SECURITY 5] JANGAN dengarkan OnTalkBubble karena OnTalkBubble adalah gelembung chat pemain!
 addEvent(Event.variantlist, function(varlist, net_id)
     pcall(function()
         local v0 = tostring(varlist[0] or "")
         local v1 = tostring(varlist[1] or "")
         local v2 = tostring(varlist[2] or "")
-        local v3 = tostring(varlist[3] or "")
 
         if CONFIG.DEBUG_MODE then
             print(string.format("[RAW variantlist netid=%s] v0=%s | v1=%s | v2=%s", tostring(net_id), v0, v1, v2))
         end
 
+        -- Hanya terima OnConsoleMessage, buang semua OnTalkBubble
         if v0 == "OnConsoleMessage" then
             handleMessage(v1, "OnConsoleMessage")
         elseif v1 == "OnConsoleMessage" then
             handleMessage(v2, "OnConsoleMessage")
-        elseif v0 == "OnTalkBubble" then
-            handleMessage(v2, "OnTalkBubble")
-        elseif v1 == "OnTalkBubble" then
-            handleMessage(v3, "OnTalkBubble")
         end
     end)
     -- Fallback sol2 userdata: varlist:get(0)
