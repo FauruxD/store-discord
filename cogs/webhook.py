@@ -18,6 +18,7 @@ class WebhookCog(commands.Cog):
         self.app = web.Application()
         self.app.router.add_get("/", self.health_check)
         self.app.router.add_get("/health", self.health_check)
+        self.app.router.add_get("/gt-deposit", self.gt_deposit_info)
         self.app.router.add_post("/saweria-webhook", self.handle_saweria)
         self.app.router.add_post("/gt-deposit", self.handle_gt_deposit)
         self.runner: web.AppRunner = None
@@ -49,6 +50,17 @@ class WebhookCog(commands.Cog):
             "service": "Store Discord Saweria Webhook",
             "bot_user": str(self.bot.user) if self.bot.user else "Starting"
         })
+
+    async def gt_deposit_info(self, request: web.Request):
+        """Endpoint GET untuk memastikan webhook deposit Lucifer online saat diakses browser."""
+        return web.json_response({
+            "status": "online",
+            "service": "Lucifer World Lock Deposit Webhook",
+            "world": config.GROWTOPIA_WORLD,
+            "method_required": "POST",
+            "message": "Endpoint aktif dan siap menerima data deposit dari executor Lucifer."
+        })
+
 
     def normalize_saweria_amount(self, raw_amount: int) -> int:
         """
