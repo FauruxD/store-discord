@@ -8,10 +8,82 @@ from .deposit import DepositModal
 
 logger = logging.getLogger("StoreBot.Views.Dashboard")
 
+class SetGrowIDModal(ui.Modal, title="Pengaturan GrowID (Growtopia)"):
+    """Modal untuk mendaftarkan atau mengganti GrowID pengguna."""
+    growid_input = ui.TextInput(
+        label="Masukkan GrowID Akun Anda",
+        placeholder="Contoh: FauruxD (Pastikan ejaan tepat)",
+        required=True,
+        min_length=3,
+        max_length=18
+    )
+
+    def __init__(self, db_manager, on_success_callback=None):
+        super().__init__()
+        self.db = db_manager
+        self.on_success_callback = on_success_callback
+
+    async def on_submit(self, interaction: discord.Interaction):
+        growid = self.growid_input.value.strip()
+        success, msg = await self.db.set_growid(interaction.user.id, growid)
+        if not success:
+            return await interaction.response.send_message(f"❌ {msg}", ephemeral=True)
+
+        if self.on_success_callback:
+            await self.on_success_callback(interaction, growid)
+        else:
+            embed = discord.Embed(
+                title="✅ GrowID Berhasil Disimpan!",
+                description=(
+                    f"GrowID Anda telah disetel ke: **`{growid}`**.\n\n"
+                    f"Setiap kali Anda mendepositkan World Lock, Diamond Lock, atau Blue Gem Lock ke donation box "
+                    f"di world **`{config.GROWTOPIA_WORLD}`**, saldo WL Anda akan otomatis bertambah!"
+                ),
+                color=discord.Color.green()
+            )
+            view = WorldDepositView(self.db, growid)
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class WorldDepositView(ui.View):
+    """View panduan deposit World Growtopia dengan tombol Cek Saldo dan Ganti GrowID."""
+    def __init__(self, db_manager, current_growid: str):
+        super().__init__(timeout=300)
+        self.db = db_manager
+        self.current_growid = current_growid
+
+    @ui.button(label="Ganti GrowID", style=discord.ButtonStyle.secondary, emoji="🔄", row=0)
+    async def change_growid_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(SetGrowIDModal(self.db))
+
+    @ui.button(label="Cek Saldo WL", style=discord.ButtonStyle.primary, emoji="💰", row=0)
+    async def check_wl_btn(self, interaction: discord.Interaction, button: ui.Button):
+        balance_wl = await self.db.get_balance_wl(interaction.user.id)
+        dl_part = balance_wl // 100
+        wl_part = balance_wl % 100
+        if balance_wl >= 100:
+            wl_str = f"**{balance_wl:,} WL** ({dl_part} DL {wl_part} WL)"
+        else:
+            wl_str = f"**{balance_wl:,} WL**"
+
+        await interaction.response.send_message(
+            f"🔒 **Saldo World Lock Anda:** {wl_str}\n👤 **GrowID Terdaftar:** `{self.current_growid}`",
+            ephemeral=True
+        )
+
+    @ui.button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️", row=0)
+    async def close_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.delete_original_response()
+        except Exception:
+            pass
+
+
 class DepositInstructionsView(ui.View):
     """
     Sub-view ephemeral yang muncul saat user menekan tombol 'Deposit Saldo'.
-    Menyediakan tombol untuk QRIS Otomatis (Saweria) dan Modal Formulir Manual.
+    Menyediakan tombol untuk QRIS Otomatis (Saweria), Deposit World (Growtopia), dan Modal Formulir Manual.
     """
     def __init__(self, db_manager, instruction_interaction: discord.Interaction):
         super().__init__(timeout=180)
@@ -70,11 +142,59 @@ class DepositInstructionsView(ui.View):
             "user_id": interaction.user.id
         }
 
-    @ui.button(label="Formulir Manual (Link/Teks)", style=discord.ButtonStyle.secondary, emoji="📝", row=0)
+    @ui.button(label="Deposit World (Growtopia)", style=discord.ButtonStyle.primary, emoji="🔒", row=0)
+    async def world_deposit_btn(self, interaction: discord.Interaction, button: ui.Button):
+        """Handler untuk panduan deposit in-game Growtopia via Donation Box."""
+        growid = await self.db.get_growid(interaction.user.id)
+        if not growid:
+            # User belum mendaftarkan GrowID: tampilkan modal input
+            async def after_set(inter: discord.Interaction, new_growid: str):
+                embed = self._build_world_deposit_embed(new_growid)
+                view = WorldDepositView(self.db, new_growid)
+                await inter.response.send_message(embed=embed, view=view, ephemeral=True)
+
+            return await interaction.response.send_modal(
+                SetGrowIDModal(self.db, on_success_callback=after_set)
+            )
+
+        embed = self._build_world_deposit_embed(growid)
+        view = WorldDepositView(self.db, growid)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    def _build_world_deposit_embed(self, growid: str) -> discord.Embed:
+        world_name = config.GROWTOPIA_WORLD
+        door_id = config.GROWTOPIA_DOOR_ID
+        bot_name = config.GROWTOPIA_BOT_NAME
+
+        door_text = f" (Door: `{door_id}`)" if door_id else ""
+        desc = (
+            "Top-up saldo **World Lock (WL)** otomatis via Donation Box in-game Growtopia:\n\n"
+            f"🌍 **Nama World:** **`{world_name}`**{door_text}\n"
+            f"🤖 **Bot Penjaga:** **`{bot_name}`**\n"
+            f"👤 **GrowID Terdaftar Anda:** **`{growid}`**\n\n"
+            "💎 **Rate & Lock yang Diterima:**\n"
+            "• **World Lock (WL):** 1 WL = **1 WL**\n"
+            "• **Diamond Lock (DL):** 1 DL = **100 WL**\n"
+            "• **Blue Gem Lock (BGL):** 1 BGL = **10.000 WL** (100 DL)\n\n"
+            "📝 **Cara Deposit:**\n"
+            f"1. Masuk ke world **`{world_name}`** di Growtopia.\n"
+            f"2. Pastikan Anda menggunakan akun GrowID: **`{growid}`**.\n"
+            f"3. Masukkan lock ke dalam **Donation Box** di dekat bot `{bot_name}`.\n"
+            "4. Sistem akan mendeteksi donasi secara instan dan saldo WL Anda otomatis bertambah!"
+        )
+        embed = discord.Embed(
+            title="🔒 Panduan Deposit World (Growtopia Donation Box)",
+            description=desc,
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="PENTING: Hanya berdonasi menggunakan akun GrowID terdaftar di atas.")
+        return embed
+
+    @ui.button(label="Formulir Manual (Link/Teks)", style=discord.ButtonStyle.secondary, emoji="📝", row=1)
     async def open_modal_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_modal(DepositModal(self.db, instruction_interaction=self.instruction_interaction))
 
-    @ui.button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️", row=0)
+    @ui.button(label="Tutup", style=discord.ButtonStyle.secondary, emoji="✖️", row=1)
     async def close_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -125,7 +245,7 @@ class MainDashboardView(ui.View):
         custom_id="store_dashboard_deposit_btn"
     )
     async def deposit_button(self, interaction: discord.Interaction, button: ui.Button):
-        """Handler saat tombol 'Deposit' ditekan: menampilkan opsi QRIS instan & transfer manual."""
+        """Handler saat tombol 'Deposit' ditekan: menampilkan opsi QRIS instan, World Deposit, & transfer manual."""
         embed = discord.Embed(
             title="💳 Panduan & Metode Deposit Saldo",
             description=(
@@ -134,7 +254,12 @@ class MainDashboardView(ui.View):
                 "• Pembayaran langsung via scan QRIS (GoPay, DANA, OVO, ShopeePay, BCA, dll).\n"
                 "• Saldo otomatis masuk dalam beberapa detik tanpa perlu tunggu admin!\n"
                 "• Klik tombol **`[⚡ QRIS Otomatis (Saweria)]`** di bawah.\n\n"
-                "🏛️ **2. Transfer Manual (Bank & E-Wallet):**\n"
+                "🔒 **2. Deposit World (Growtopia Donation Box) - 100% INSTAN:**\n"
+                f"• Donasi langsung via Donation Box di world **`{config.GROWTOPIA_WORLD}`**.\n"
+                "• Menerima World Lock (WL), Diamond Lock (DL), dan Blue Gem Lock (BGL).\n"
+                "• Wajib mendaftarkan GrowID Anda terlebih dahulu.\n"
+                "• Klik tombol **`[🔒 Deposit World (Growtopia)]`** di bawah.\n\n"
+                "🏛️ **3. Transfer Manual (Bank & E-Wallet):**\n"
                 f"{config.BANK_TRANSFER_INFO}\n"
                 "• Konfirmasi via upload screenshot: ketik `/deposit` di chat.\n"
                 "• Konfirmasi via link: klik tombol **`[📝 Formulir Manual]`** di bawah."
@@ -143,7 +268,7 @@ class MainDashboardView(ui.View):
         )
         if config.QRIS_IMAGE_URL:
             embed.set_image(url=config.QRIS_IMAGE_URL)
-        embed.set_footer(text="Deposit QRIS Otomatis 24/7 • Tanpa Biaya Tambahan")
+        embed.set_footer(text="Deposit Otomatis 24/7 (Saweria & In-Game World Lock)")
 
         view = DepositInstructionsView(self.db, interaction)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -156,22 +281,34 @@ class MainDashboardView(ui.View):
     )
     async def balance_button(self, interaction: discord.Interaction, button: ui.Button):
         """Handler untuk cek saldo pengguna secara privat (ephemeral)."""
-        balance = await self.db.get_balance(interaction.user.id)
+        user = await self.db.get_or_create_user(interaction.user.id)
+        balance = int(user.get("balance", 0))
+        balance_wl = int(user.get("balance_wl", 0))
+        growid = user.get("growid")
+
+        if balance_wl >= 100:
+            dl_part = balance_wl // 100
+            wl_part = balance_wl % 100
+            wl_str = f"**{balance_wl:,} WL** ({dl_part} DL {wl_part} WL)"
+        else:
+            wl_str = f"**{balance_wl:,} WL**"
 
         embed = discord.Embed(
             title="💰 Informasi Saldo Akun",
-            description=f"Saldo Anda saat ini: **Rp {balance:,}**",
             color=discord.Color.teal()
         )
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.add_field(name="🇮🇩 Saldo Rupiah (IDR)", value=f"**Rp {balance:,}**", inline=True)
+        embed.add_field(name="🔒 Saldo World Lock", value=wl_str, inline=True)
         embed.add_field(
-            name="Status Akun",
-            value="🟢 Terverifikasi" if balance > 0 else "⚪ Belum Ada Saldo",
-            inline=True
+            name="👤 GrowID Terdaftar",
+            value=f"`{growid}`" if growid else "*Belum disetel (Ketik `/setgrowid`)*",
+            inline=False
         )
-        embed.set_footer(text="Gunakan tombol 'Deposit' jika ingin menambah saldo Anda.")
+        embed.set_footer(text="Gunakan tombol 'Deposit' jika ingin menambah saldo IDR atau World Lock.")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
     @ui.button(
         label="Tutorial",

@@ -98,7 +98,72 @@ class StoreCog(commands.Cog):
                 view = AdminDepositApprovalView(self.bot.db, deposit_id, interaction.user.id, nominal)
                 await log_channel.send(embed=embed_admin, view=view)
 
+    @app_commands.command(
+        name="setgrowid",
+        description="Daftarkan atau ganti GrowID akun Growtopia Anda untuk deposit World Lock."
+    )
+    @app_commands.describe(
+        growid="GrowID Anda di game Growtopia (contoh: FauruxD)"
+    )
+    async def setgrowid_slash(self, interaction: discord.Interaction, growid: str):
+        """Mendaftarkan GrowID user."""
+        await interaction.response.defer(ephemeral=True)
+        success, msg = await self.bot.db.set_growid(interaction.user.id, growid)
+        if not success:
+            return await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+
+        embed = discord.Embed(
+            title="✅ GrowID Berhasil Didaftarkan!",
+            description=(
+                f"GrowID Anda telah disetel ke: **`{growid.strip()}`**.\n\n"
+                f"Sekarang Anda dapat melakukan deposit World Lock (WL), Diamond Lock (DL), atau Blue Gem Lock (BGL) "
+                f"melalui **Donation Box** di world **`{config.GROWTOPIA_WORLD}`**.\n"
+                f"Saldo WL Anda akan otomatis masuk dalam beberapa detik!"
+            ),
+            color=discord.Color.green()
+        )
+        embed.set_footer(text="Pastikan Anda hanya mendonasikan lock dari akun GrowID ini.")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="mygrowid",
+        description="Lihat GrowID terdaftar dan saldo World Lock Anda saat ini."
+    )
+    async def mygrowid_slash(self, interaction: discord.Interaction):
+        """Melihat info GrowID & saldo WL pengguna."""
+        await interaction.response.defer(ephemeral=True)
+        user = await self.bot.db.get_or_create_user(interaction.user.id)
+        growid = user.get("growid")
+        balance_wl = int(user.get("balance_wl", 0))
+
+        if balance_wl >= 100:
+            dl_part = balance_wl // 100
+            wl_part = balance_wl % 100
+            wl_str = f"**{balance_wl:,} WL** ({dl_part} DL {wl_part} WL)"
+        else:
+            wl_str = f"**{balance_wl:,} WL**"
+
+        embed = discord.Embed(
+            title="🔒 Informasi GrowID & Saldo WL",
+            color=discord.Color.teal()
+        )
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.add_field(
+            name="👤 GrowID Terdaftar",
+            value=f"`{growid}`" if growid else "*Belum disetel (Gunakan `/setgrowid`)*",
+            inline=True
+        )
+        embed.add_field(name="💎 Saldo World Lock", value=wl_str, inline=True)
+        embed.add_field(
+            name="🌍 World Deposit",
+            value=f"`{config.GROWTOPIA_WORLD}`",
+            inline=True
+        )
+        embed.set_footer(text="Gunakan /setgrowid jika ingin mengubah GrowID Anda.")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     @commands.Cog.listener()
+
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         """Global error handler untuk slash command."""
         if isinstance(error, app_commands.MissingPermissions):

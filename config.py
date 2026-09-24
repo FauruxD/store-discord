@@ -41,6 +41,13 @@ SAWERIA_URL = os.getenv("SAWERIA_URL", "https://saweria.co")
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", 8080))
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0")
 
+# Integrasi World Deposit Growtopia (Lucifer Bot)
+GROWTOPIA_WORLD = os.getenv("GROWTOPIA_WORLD", "STOREDEP")
+GROWTOPIA_DOOR_ID = os.getenv("GROWTOPIA_DOOR_ID", "")
+GROWTOPIA_BOT_NAME = os.getenv("GROWTOPIA_BOT_NAME", "StoreBot")
+GROWTOPIA_SECRET_TOKEN = os.getenv("GROWTOPIA_SECRET_TOKEN", "lucifer-secret-token-change-me")
+
 # Database
 DATABASE_PATH = BASE_DIR / os.getenv("DATABASE_PATH", "database/store.db")
 DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+

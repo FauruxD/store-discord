@@ -19,6 +19,7 @@ class WebhookCog(commands.Cog):
         self.app.router.add_get("/", self.health_check)
         self.app.router.add_get("/health", self.health_check)
         self.app.router.add_post("/saweria-webhook", self.handle_saweria)
+        self.app.router.add_post("/gt-deposit", self.handle_gt_deposit)
         self.runner: web.AppRunner = None
         self.site: web.TCPSite = None
 
@@ -233,5 +234,179 @@ class WebhookCog(commands.Cog):
             "amount": amount
         })
 
+    async def handle_gt_deposit(self, request: web.Request) -> web.Response:
+        """
+        Handler API endpoint untuk menerima notifikasi deposit World Lock / Diamond Lock / BGL
+        dari script executor Lucifer Lua v2.86.
+        """
+        # Verifikasi Token Rahasia (X-GT-Token atau Authorization)
+        expected_token = getattr(config, "GROWTOPIA_SECRET_TOKEN", None)
+        if expected_token:
+            provided_token = request.headers.get("X-GT-Token")
+            if not provided_token:
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    provided_token = auth_header[7:].strip()
+                else:
+                    provided_token = auth_header.strip()
+
+            if provided_token != expected_token:
+                logger.warning("Akses ditolak pada /gt-deposit: Token tidak valid.")
+                return web.json_response({"error": "Unauthorized: Token tidak valid"}, status=401)
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "Bad Request: Body harus berupa JSON"}, status=400)
+
+        growid = str(payload.get("growid", "")).strip()
+        item_name = str(payload.get("item_name", "")).strip()
+        try:
+            count = int(payload.get("count", 0))
+            amount_wl = int(payload.get("amount_wl", 0))
+        except (ValueError, TypeError):
+            return web.json_response({"error": "Bad Request: count dan amount_wl harus integer"}, status=400)
+
+        world = str(payload.get("world", config.GROWTOPIA_WORLD or "STOREDEP")).strip()
+
+        if not growid or count <= 0 or amount_wl <= 0:
+            return web.json_response({"error": "Bad Request: Parameter growid, count, atau amount_wl tidak valid"}, status=400)
+
+        logger.info(
+            "Menerima deposit GT dari GrowID '%s': %d %s (=%d WL) di world '%s'",
+            growid, count, item_name, amount_wl, world
+        )
+
+        # Cari user berdasarkan GrowID (case-insensitive)
+        user = await self.bot.db.get_user_by_growid(growid)
+
+        if not user:
+            # Catat sebagai UNCLAIMED agar admin dapat memeriksa dan menambahkannya jika diperlukan
+            dep_id = await self.bot.db.record_gt_deposit(
+                user_id=None,
+                growid=growid,
+                item_name=item_name,
+                count=count,
+                amount_wl=amount_wl,
+                world=world,
+                status="UNCLAIMED"
+            )
+            logger.warning("Deposit GT dari GrowID '%s' belum terdaftar pada akun Discord manapun! DepID: %s", growid, dep_id)
+
+            # Kirim peringatan ke Channel Order / Deposit Log
+            target_ch_id = getattr(config, "ORDER_CHANNEL_ID", None) or config.DEPOSIT_LOG_CHANNEL_ID
+            if target_ch_id:
+                ch = self.bot.get_channel(target_ch_id)
+                if ch:
+                    unclaimed_embed = discord.Embed(
+                        title="⚠️ Deposit World Lock Belum Terdaftar",
+                        description=(
+                            f"Terdeteksi donasi **{count}x {item_name}** (**+{amount_wl:,} WL**) dari GrowID **`{growid}`** di world **`{world}`**, "
+                            f"tetapi **GrowID tersebut belum didaftarkan** oleh pengguna manapun di Discord!\n\n"
+                            f"👉 **Bagi Pemilik GrowID `{growid}`:**\n"
+                            f"Segera jalankan perintah `/setgrowid {growid}` di server ini, lalu hubungi admin beserta ID Deposit: `{dep_id}`."
+                        ),
+                        color=discord.Color.orange()
+                    )
+                    unclaimed_embed.set_footer(text="ID Transaksi: " + dep_id)
+                    await ch.send(embed=unclaimed_embed)
+
+            return web.json_response({
+                "status": "unclaimed",
+                "message": f"GrowID '{growid}' belum terdaftar di Discord bot.",
+                "deposit_id": dep_id
+            }, status=200)
+
+        # User terdaftar! Tambahkan saldo WL
+        user_id = user["user_id"]
+        new_balance_wl = await self.bot.db.add_balance_wl(user_id, amount_wl)
+        dep_id = await self.bot.db.record_gt_deposit(
+            user_id=user_id,
+            growid=growid,
+            item_name=item_name,
+            count=count,
+            amount_wl=amount_wl,
+            world=world,
+            status="SUCCESS"
+        )
+
+        logger.info("Berhasil menambahkan %d WL ke user %d. Saldo WL sekarang: %d", amount_wl, user_id, new_balance_wl)
+
+        # 1. Kirim Direct Message (DM) ke Pembeli
+        try:
+            discord_user = await self.bot.fetch_user(user_id)
+            if discord_user:
+                dm_embed = discord.Embed(
+                    title="🎉 Deposit World Lock Berhasil!",
+                    description=(
+                        f"Halo {discord_user.mention}, deposit in-game Growtopia kamu telah berhasil diverifikasi dan saldo WL otomatis ditambahkan!\n\n"
+                        f"📦 **Item Donasi:** `{count}x {item_name}`\n"
+                        f"💎 **World Lock Masuk:** **+{amount_wl:,} WL**\n"
+                        f"💰 **Total Saldo WL Kamu:** **{new_balance_wl:,} WL**\n"
+                        f"🌍 **World:** `{world}`\n"
+                        f"👤 **GrowID Terdaftar:** `{growid}`\n"
+                        f"🆔 **ID Transaksi:** `{dep_id}`"
+                    ),
+                    color=discord.Color.green()
+                )
+                if discord_user.display_avatar:
+                    dm_embed.set_thumbnail(url=discord_user.display_avatar.url)
+                dm_embed.set_footer(text="100% Otomatis • Lucifer Bot Integration")
+                await discord_user.send(embed=dm_embed)
+        except Exception as e:
+            logger.warning("Gagal mengirim DM notifikasi GT ke user %d: %s", user_id, e)
+
+        # 2. Kirim Notifikasi Publik di Order Channel
+        order_ch_id = getattr(config, "ORDER_CHANNEL_ID", None)
+        if order_ch_id:
+            ch = self.bot.get_channel(order_ch_id)
+            if ch:
+                pub_embed = discord.Embed(
+                    title="⚡ Deposit World Lock Berhasil!",
+                    description=(
+                        f"Selamat, pembeli <@{user_id}> telah berhasil melakukan deposit in-game via Donation Box!\n\n"
+                        f"👤 **GrowID:** `{growid}`\n"
+                        f"💎 **Nominal Masuk:** **+{amount_wl:,} World Lock** ({count}x {item_name})\n"
+                        f"💰 **Saldo WL Terbaru:** **{new_balance_wl:,} WL**\n"
+                        f"🌍 **World:** `{world}`"
+                    ),
+                    color=discord.Color.green()
+                )
+                discord_user = self.bot.get_user(user_id)
+                if discord_user and discord_user.display_avatar:
+                    pub_embed.set_thumbnail(url=discord_user.display_avatar.url)
+                pub_embed.set_footer(text="Donation Box Auto-Detector • Instan")
+                await ch.send(content=f"<@{user_id}>", embed=pub_embed)
+
+        # 3. Kirim Log Transaksi di Channel Audit/Deposit Log
+        log_ch_id = config.DEPOSIT_LOG_CHANNEL_ID
+        if log_ch_id:
+            ch = self.bot.get_channel(log_ch_id)
+            if ch:
+                log_embed = discord.Embed(
+                    title="📝 [LOG] GT World Lock Deposit Sukses",
+                    description=(
+                        f"• **User:** <@{user_id}> (`{user_id}`)\n"
+                        f"• **GrowID:** `{growid}`\n"
+                        f"• **Item:** {count}x {item_name}\n"
+                        f"• **WL Masuk:** +{amount_wl:,} WL\n"
+                        f"• **Saldo WL:** {new_balance_wl:,} WL\n"
+                        f"• **World:** `{world}`\n"
+                        f"• **ID Transaksi:** `{dep_id}`"
+                    ),
+                    color=discord.Color.blue()
+                )
+                await ch.send(embed=log_embed)
+
+        return web.json_response({
+            "status": "success",
+            "user_id": user_id,
+            "growid": growid,
+            "amount_wl": amount_wl,
+            "balance_wl": new_balance_wl,
+            "deposit_id": dep_id
+        })
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(WebhookCog(bot))
+

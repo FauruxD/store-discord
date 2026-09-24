@@ -319,10 +319,13 @@ async def run_tests():
         def __init__(self, uid, name):
             self.id = uid
             self.name = name
+            self.mention = f"<@{uid}>"
+            self.display_avatar = None
             self.dms_received = []
 
         async def send(self, *args, **kwargs):
             self.dms_received.append((args, kwargs))
+
 
     class MockChannel:
         def __init__(self):
@@ -425,7 +428,71 @@ async def run_tests():
     assert "warning" in anon_json
     print("-> Webhook Saweria tanpa Discord ID ditangani dengan aman (status received, admin alerted).")
 
+    print("\n=== [15] Pengujian Integrasi Growtopia World Deposit (Lucifer Webhook) ===")
+    # 1. Test set_growid
+    success, msg = await db.set_growid(test_user_id, "FauruxD")
+    assert success is True
+    assert await db.get_growid(test_user_id) == "FauruxD"
+    print("-> Berhasil mendaftarkan GrowID: FauruxD")
+
+    # 2. Test duplikasi GrowID ditolak
+    another_user_id = 1234567890
+    dup_success, dup_msg = await db.set_growid(another_user_id, "fauruxd")
+    assert dup_success is False
+    print("-> Berhasil memvalidasi duplikasi GrowID (case-insensitive ditolak).")
+
+    # 3. Test get_user_by_growid
+    found_user = await db.get_user_by_growid("FAURUXD")
+    assert found_user is not None
+    assert found_user["user_id"] == test_user_id
+    print("-> Berhasil get_user_by_growid case-insensitive.")
+
+    # 4. Test Webhook /gt-deposit dengan token salah -> 401
+    bad_auth_resp = await client.post(
+        "/gt-deposit",
+        json={"growid": "FauruxD", "item_name": "Diamond Lock", "count": 1, "amount_wl": 100},
+        headers={"X-GT-Token": "wrong-token"}
+    )
+    assert bad_auth_resp.status == 401
+    print("-> Webhook /gt-deposit menolak request dengan token tidak valid (401 Unauthorized).")
+
+    # 5. Test Webhook /gt-deposit dengan GrowID belum terdaftar -> unclaimed
+    unregistered_resp = await client.post(
+        "/gt-deposit",
+        json={"growid": "UnknownPlayer", "item_name": "World Lock", "count": 10, "amount_wl": 10},
+        headers={"X-GT-Token": "lucifer-secret-token-change-me"}
+    )
+    assert unregistered_resp.status == 200
+    unreg_json = await unregistered_resp.json()
+    assert unreg_json["status"] == "unclaimed"
+    print("-> Webhook /gt-deposit menangani GrowID yang belum terdaftar dengan aman (status: unclaimed).")
+
+    # 6. Test Webhook /gt-deposit sukses (Diamond Lock -> 200 WL)
+    initial_wl = await db.get_balance_wl(test_user_id)
+    gt_resp = await client.post(
+        "/gt-deposit",
+        json={"growid": "FauruxD", "item_name": "Diamond Lock", "count": 2, "amount_wl": 200, "world": "STOREDEP"},
+        headers={"X-GT-Token": "lucifer-secret-token-change-me"}
+    )
+    assert gt_resp.status == 200
+    gt_json = await gt_resp.json()
+    assert gt_json["status"] == "success"
+    assert gt_json["amount_wl"] == 200
+    assert gt_json["balance_wl"] == initial_wl + 200
+
+    new_wl_in_db = await db.get_balance_wl(test_user_id)
+    assert new_wl_in_db == initial_wl + 200
+    print(f"-> Webhook /gt-deposit BERHASIL: 2 Diamond Lock (+200 WL) otomatis masuk ke saldo user (Total WL: {new_wl_in_db} WL)!")
+
+    # 7. Test riwayat deposit gt_deposits
+    gt_history = await db.get_gt_deposits(test_user_id)
+    assert len(gt_history) >= 1
+    assert gt_history[0]["growid"] == "FauruxD"
+    assert gt_history[0]["amount_wl"] == 200
+    print(f"-> Riwayat deposit GT tercatat di database: ID {gt_history[0]['deposit_id']}")
+
     await client.close()
+
 
     # Cleanup file order test
     if delivered_file.exists():

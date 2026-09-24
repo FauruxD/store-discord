@@ -2,8 +2,11 @@
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     balance INTEGER NOT NULL DEFAULT 0 CHECK(balance >= 0),
+    balance_wl INTEGER NOT NULL DEFAULT 0 CHECK(balance_wl >= 0),
+    growid TEXT UNIQUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
 
 -- Tabel Katalog Produk Digital
 CREATE TABLE IF NOT EXISTS products (
@@ -92,4 +95,19 @@ CREATE TABLE IF NOT EXISTS reviews (
     FOREIGN KEY(user_id) REFERENCES users(user_id),
     FOREIGN KEY(product_id) REFERENCES products(product_id)
 );
+
+-- Tabel Riwayat Deposit World Growtopia (Donation Box / Lucifer Bot)
+CREATE TABLE IF NOT EXISTS gt_deposits (
+    deposit_id TEXT PRIMARY KEY,
+    user_id INTEGER,
+    growid TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    count INTEGER NOT NULL CHECK(count > 0),
+    amount_wl INTEGER NOT NULL CHECK(amount_wl > 0),
+    world TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'SUCCESS', -- SUCCESS, UNCLAIMED
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(user_id)
+);
+
 

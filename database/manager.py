@@ -1,6 +1,7 @@
 import aiosqlite
 import uuid
 import logging
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -50,11 +51,33 @@ class DatabaseManager:
                 await db.execute("ALTER TABLE orders ADD COLUMN discount_amount INTEGER NOT NULL DEFAULT 0;")
             except Exception:
                 pass
+            try:
+                await db.execute("ALTER TABLE users ADD COLUMN balance_wl INTEGER NOT NULL DEFAULT 0;")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE users ADD COLUMN growid TEXT;")
+            except Exception:
+                pass
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS gt_deposits (
+                    deposit_id TEXT PRIMARY KEY,
+                    user_id INTEGER,
+                    growid TEXT NOT NULL,
+                    item_name TEXT NOT NULL,
+                    count INTEGER NOT NULL CHECK(count > 0),
+                    amount_wl INTEGER NOT NULL CHECK(amount_wl > 0),
+                    world TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'SUCCESS',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES users(user_id)
+                );
+            """)
             await db.commit()
             logger.info("Database berhasil diinisialisasi pada: %s", self.db_path)
 
     # =========================================================================
-    # USER & SALDO
+    # USER & SALDO (IDR & WORLD LOCK)
     # =========================================================================
 
     async def get_or_create_user(self, user_id: int) -> Dict[str, Any]:
@@ -62,7 +85,7 @@ class DatabaseManager:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT user_id, balance, created_at FROM users WHERE user_id = ?",
+                "SELECT user_id, balance, balance_wl, growid, created_at FROM users WHERE user_id = ?",
                 (user_id,)
             )
             row = await cursor.fetchone()
@@ -71,22 +94,134 @@ class DatabaseManager:
 
             # Insert pengguna baru dengan saldo 0
             await db.execute(
-                "INSERT INTO users (user_id, balance) VALUES (?, 0)",
+                "INSERT INTO users (user_id, balance, balance_wl) VALUES (?, 0, 0)",
                 (user_id,)
             )
             await db.commit()
 
             cursor = await db.execute(
-                "SELECT user_id, balance, created_at FROM users WHERE user_id = ?",
+                "SELECT user_id, balance, balance_wl, growid, created_at FROM users WHERE user_id = ?",
                 (user_id,)
             )
             new_row = await cursor.fetchone()
-            return dict(new_row) if new_row else {"user_id": user_id, "balance": 0}
+            return dict(new_row) if new_row else {"user_id": user_id, "balance": 0, "balance_wl": 0, "growid": None}
 
     async def get_balance(self, user_id: int) -> int:
-        """Mengambil sisa saldo pengguna."""
+        """Mengambil sisa saldo IDR (Rupiah) pengguna."""
         user = await self.get_or_create_user(user_id)
         return int(user.get("balance", 0))
+
+    async def get_balance_wl(self, user_id: int) -> int:
+        """Mengambil sisa saldo World Lock (WL) pengguna."""
+        user = await self.get_or_create_user(user_id)
+        return int(user.get("balance_wl", 0))
+
+    async def add_balance_wl(self, user_id: int, amount: int) -> int:
+        """Menambahkan saldo World Lock (WL) pengguna."""
+        await self.get_or_create_user(user_id)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET balance_wl = MAX(0, balance_wl + ?) WHERE user_id = ?",
+                (amount, user_id)
+            )
+            await db.commit()
+        return await self.get_balance_wl(user_id)
+
+    async def set_balance_wl(self, user_id: int, new_balance: int) -> int:
+        """Mengatur saldo World Lock (WL) pengguna ke nilai tertentu."""
+        await self.get_or_create_user(user_id)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET balance_wl = ? WHERE user_id = ?",
+                (max(0, new_balance), user_id)
+            )
+            await db.commit()
+        return await self.get_balance_wl(user_id)
+
+    async def set_growid(self, user_id: int, growid: str) -> Tuple[bool, str]:
+        """
+        Mendaftarkan atau mengubah GrowID pengguna.
+        Memvalidasi format dan memastikan tidak ada duplikasi GrowID antar pengguna.
+        """
+        growid_clean = growid.strip()
+        if not re.match(r"^[A-Za-z0-9_]{3,18}$", growid_clean):
+            return False, "GrowID tidak valid! Harus 3-18 karakter alfanumerik (huruf, angka, atau underscore)."
+
+        await self.get_or_create_user(user_id)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT user_id FROM users WHERE LOWER(growid) = LOWER(?) AND user_id != ?",
+                (growid_clean, user_id)
+            )
+            existing = await cursor.fetchone()
+            if existing:
+                return False, f"GrowID `{growid_clean}` sudah digunakan oleh akun Discord lain!"
+
+            await db.execute(
+                "UPDATE users SET growid = ? WHERE user_id = ?",
+                (growid_clean, user_id)
+            )
+            await db.commit()
+            return True, f"GrowID berhasil disimpan ke **{growid_clean}**."
+
+    async def get_growid(self, user_id: int) -> Optional[str]:
+        """Mengambil GrowID terdaftar milik pengguna."""
+        user = await self.get_or_create_user(user_id)
+        return user.get("growid")
+
+    async def get_user_by_growid(self, growid: str) -> Optional[Dict[str, Any]]:
+        """Mencari data pengguna berdasarkan GrowID (case-insensitive)."""
+        growid_clean = growid.strip()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT user_id, balance, balance_wl, growid, created_at FROM users WHERE LOWER(growid) = LOWER(?)",
+                (growid_clean,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def record_gt_deposit(
+        self,
+        user_id: Optional[int],
+        growid: str,
+        item_name: str,
+        count: int,
+        amount_wl: int,
+        world: str,
+        status: str = "SUCCESS"
+    ) -> str:
+        """Mencatat transaksi deposit in-game Growtopia ke database."""
+        deposit_id = f"GT-{uuid.uuid4().hex[:8].upper()}"
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO gt_deposits (deposit_id, user_id, growid, item_name, count, amount_wl, world, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (deposit_id, user_id, growid.strip(), item_name, count, amount_wl, world, status)
+            )
+            await db.commit()
+        return deposit_id
+
+    async def get_gt_deposits(self, user_id: Optional[int] = None, limit: int = 10) -> List[Dict[str, Any]]:
+        """Mengambil riwayat transaksi deposit Growtopia."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if user_id:
+                cursor = await db.execute(
+                    "SELECT * FROM gt_deposits WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (user_id, limit)
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT * FROM gt_deposits ORDER BY created_at DESC LIMIT ?",
+                    (limit,)
+                )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
 
     async def add_balance(self, user_id: int, amount: int) -> int:
         """

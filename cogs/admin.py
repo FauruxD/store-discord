@@ -888,7 +888,125 @@ class AdminCog(commands.Cog):
             logger.error("Gagal menjalankan add_balance: %s", e, exc_info=True)
             await interaction.followup.send(f"❌ Terjadi kesalahan saat mengubah saldo: {e}", ephemeral=True)
 
+    @app_commands.command(
+        name="set_balance_wl",
+        description="[Admin] Atur (override) saldo World Lock pengguna ke nominal tertentu."
+    )
+    @app_commands.describe(
+        user="Pengguna Discord yang saldo WL-nya ingin diubah",
+        amount="Nominal saldo World Lock baru (WL)"
+    )
+    async def set_balance_wl(self, interaction: discord.Interaction, user: discord.User, amount: int):
+        """Mengatur saldo WL user secara manual."""
+        if not self.is_admin_or_has_role(interaction):
+            return await interaction.response.send_message(
+                "❌ Anda tidak memiliki izin untuk menggunakan perintah ini!",
+                ephemeral=True
+            )
+
+        await interaction.response.defer(ephemeral=True)
+
+        if amount < 0:
+            return await interaction.followup.send("❌ Nominal saldo WL tidak boleh kurang dari 0 (negatif)!", ephemeral=True)
+
+        try:
+            old_balance = await self.bot.db.get_balance_wl(user.id)
+            new_balance = await self.bot.db.set_balance_wl(user.id, amount)
+
+            embed = discord.Embed(
+                title="🔒 Update Saldo World Lock (Set Balance WL)",
+                description=(
+                    f"Saldo World Lock pengguna {user.mention} (`{user.id}`) berhasil diatur ulang!\n\n"
+                    f"• **Saldo Sebelumnya:** {old_balance:,} WL\n"
+                    f"• **Saldo Baru:** **{new_balance:,} WL**\n"
+                    f"• **Dieksekusi Oleh:** {interaction.user.mention}"
+                ),
+                color=discord.Color.green()
+            )
+            if hasattr(user, "display_avatar") and user.display_avatar:
+                embed.set_thumbnail(url=user.display_avatar.url)
+            embed.set_footer(text="Admin WL Management • Lucifer Store")
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+            if config.DEPOSIT_LOG_CHANNEL_ID:
+                ch = self.bot.get_channel(config.DEPOSIT_LOG_CHANNEL_ID)
+                if ch:
+                    log_embed = discord.Embed(
+                        title="📝 Audit Log: Set Balance WL Manual",
+                        description=(
+                            f"Admin {interaction.user.mention} mengatur ulang saldo WL pengguna {user.mention}.\n\n"
+                            f"• **Target User:** {user.mention} (`{user.id}`)\n"
+                            f"• **Saldo WL Lama:** {old_balance:,} WL\n"
+                            f"• **Saldo WL Baru:** **{new_balance:,} WL**"
+                        ),
+                        color=discord.Color.blue()
+                    )
+                    await ch.send(embed=log_embed)
+        except Exception as e:
+            logger.error("Gagal menjalankan set_balance_wl: %s", e, exc_info=True)
+            await interaction.followup.send(f"❌ Terjadi kesalahan saat mengatur saldo WL: {e}", ephemeral=True)
+
+    @app_commands.command(
+        name="add_balance_wl",
+        description="[Admin] Tambahkan atau kurangi saldo World Lock pengguna secara langsung."
+    )
+    @app_commands.describe(
+        user="Pengguna Discord yang saldo WL-nya ingin ditambah/dikurangi",
+        amount="Nominal WL yang ingin ditambahkan (gunakan minus untuk mengurangi, contoh: 50 atau -20)"
+    )
+    async def add_balance_wl(self, interaction: discord.Interaction, user: discord.User, amount: int):
+        """Menambahkan saldo WL pengguna secara manual."""
+        if not self.is_admin_or_has_role(interaction):
+            return await interaction.response.send_message(
+                "❌ Anda tidak memiliki izin untuk menggunakan perintah ini!",
+                ephemeral=True
+            )
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            old_balance = await self.bot.db.get_balance_wl(user.id)
+            new_balance = await self.bot.db.add_balance_wl(user.id, amount)
+            aksi = "Penambahan" if amount >= 0 else "Pengurangan"
+
+            embed = discord.Embed(
+                title=f"🔒 {aksi} Saldo World Lock Berhasil",
+                description=(
+                    f"Saldo WL pengguna {user.mention} (`{user.id}`) berhasil disesuaikan!\n\n"
+                    f"• **Saldo Sebelumnya:** {old_balance:,} WL\n"
+                    f"• **Perubahan:** {'+' if amount >= 0 else ''}{amount:,} WL\n"
+                    f"• **Saldo Sekarang:** **{new_balance:,} WL**\n"
+                    f"• **Dieksekusi Oleh:** {interaction.user.mention}"
+                ),
+                color=discord.Color.green()
+            )
+            if hasattr(user, "display_avatar") and user.display_avatar:
+                embed.set_thumbnail(url=user.display_avatar.url)
+            embed.set_footer(text="Admin WL Management • Lucifer Store")
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+            if config.DEPOSIT_LOG_CHANNEL_ID:
+                ch = self.bot.get_channel(config.DEPOSIT_LOG_CHANNEL_ID)
+                if ch:
+                    log_embed = discord.Embed(
+                        title=f"📝 Audit Log: {aksi} Balance WL Manual",
+                        description=(
+                            f"Admin {interaction.user.mention} melakukan {aksi.lower()} saldo WL untuk {user.mention}.\n\n"
+                            f"• **Target User:** {user.mention} (`{user.id}`)\n"
+                            f"• **Perubahan:** {'+' if amount >= 0 else ''}{amount:,} WL\n"
+                            f"• **Saldo WL Baru:** **{new_balance:,} WL**"
+                        ),
+                        color=discord.Color.blue()
+                    )
+                    await ch.send(embed=log_embed)
+        except Exception as e:
+            logger.error("Gagal menjalankan add_balance_wl: %s", e, exc_info=True)
+            await interaction.followup.send(f"❌ Terjadi kesalahan saat mengubah saldo WL: {e}", ephemeral=True)
+
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+
         """Global error handler untuk semua command di AdminCog agar tidak pernah 'did not respond'."""
         logger.error("Error in admin command: %s", error)
         msg = f"❌ Terjadi kesalahan: {error}"
