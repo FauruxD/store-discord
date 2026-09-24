@@ -223,7 +223,7 @@ end)
 
 -- Callback saat script dihentikan
 function on_stop(err)
-    if err ~= "" then
+    if err ~= "" and not string.find(string.lower(err), "exit_mode") then
         print("[LUCIFER STOPPED WITH ERROR] " .. err)
     else
         print("[LUCIFER STOPPED] Script dihentikan secara normal.")
@@ -245,13 +245,22 @@ while true do
             end
             sleep(3500)
         else
-            -- Dengarkan event secara instan dan berkelanjutan
-            listenEvents(1)
+            -- Dengarkan event secara instan dan aman (dilindungi pcall)
+            local ok, res = pcall(function()
+                listenEvents(3)
+            end)
+            if not ok then
+                if string.find(string.lower(tostring(res)), "exit_mode") then
+                    break
+                end
+                sleep(500)
+            end
         end
     else
         print("[INFO] Menunggu bot online...")
         sleep(2000)
     end
-    sleep(50)
+    sleep(100)
 end
+
 
