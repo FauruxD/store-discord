@@ -1,5 +1,5 @@
 -- ==============================================================================
--- LUCIFER LUA v2.86 - AUTOMATED DONATION BOX DEPOSIT LISTENER (ENHANCED)
+-- LUCIFER LUA v2.86 - AUTOMATED DONATION BOX DEPOSIT LISTENER (ENHANCED V3)
 -- ==============================================================================
 -- Script ini berjalan di executor Lucifer bot untuk mendeteksi deposit
 -- World Lock, Diamond Lock, dan Blue Gem Lock via Donation Box in-game Growtopia.
@@ -52,7 +52,7 @@ pcall(function()
     local c = getConsole()
     if c then
         c.enabled = true
-        print("[INIT] Console reader diaktifkan.")
+        print("[INIT] Console reader diaktifkan (c.enabled = true).")
     end
 end)
 
@@ -93,44 +93,53 @@ local function getItemRate(raw_item_name)
 end
 
 -- Fungsi mem-parsing teks donasi dari berbagai format Growtopia
-local function parseDonation(clean_text)
-    -- Bersihkan karakter kurung siku dan tanda baca luar
-    local text = string.gsub(clean_text, "[%[%]]", "")
-    text = string.gsub(text, "^%s*(.-)%s*$", "%1")
-    local lower = string.lower(text)
+local function parseDonation(raw_text)
+    -- 1. Hapus kode warna Growtopia (seperti `2, `0, dll)
+    local clean = removeColor(tostring(raw_text))
+
+    -- 2. Hapus timestamp [04:03:02] atau sejenisnya jika ada
+    clean = string.gsub(clean, "%[%d+:%d+:%d+%]", "")
+
+    -- 3. Hapus kurung siku [ dan ]
+    clean = string.gsub(clean, "[%[%]]", "")
+
+    -- 4. Trim whitespace
+    clean = string.gsub(clean, "^%s*(.-)%s*$", "%1")
+
+    local lower = string.lower(clean)
 
     -- Cek kata kunci donasi
     if not (string.find(lower, "donat") or string.find(lower, "place") or string.find(lower, "deposit")) then
-        return nil, nil, nil
+        return nil, nil, nil, clean
     end
 
     local growid, count_str, item_name = nil, nil, nil
 
     -- Format 1 (Standar Donation Box GT):
+    -- "FaruuXes places 193 World Lock into the Donation Box"
+    -- "FaruuXes places 1 World Lock into the Display Box"
+    growid, count_str, item_name = string.match(clean, "([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into")
+
+    -- Format 2 (Standar Alternatif GT):
     -- "FaruuXes has donated 1 World Lock."
     -- "FaruuXes has donated 5 Diamond Locks."
-    growid, count_str, item_name = string.match(text, "([%w_]+)%s+has%s+donated%s+(%d+)%s+(.-)%.?$")
-
-    -- Format 2:
-    -- "FaruuXes places 1 World Lock into the Donation Box"
-    -- "FaruuXes places 1 World Lock into the Display Box"
     if not growid then
-        growid, count_str, item_name = string.match(text, "([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into")
+        growid, count_str, item_name = string.match(clean, "([%w_]+)%s+has%s+donated%s+(%d+)%s+(.-)%.?$")
     end
 
     -- Format 3:
     -- "FaruuXes deposited 1 World Lock into Donation Box"
     if not growid then
-        growid, count_str, item_name = string.match(text, "([%w_]+)%s+deposited%s+(%d+)%s+(.-)%s+into")
+        growid, count_str, item_name = string.match(clean, "([%w_]+)%s+deposited%s+(%d+)%s+(.-)%s+into")
     end
 
     -- Format 4 (Variasi bebas):
     if not growid then
-        growid, count_str, item_name = string.match(text, "([%w_]+)%s+donated%s+(%d+)%s+(.-)%.?$")
+        growid, count_str, item_name = string.match(clean, "([%w_]+)%s+donated%s+(%d+)%s+(.-)%.?$")
     end
 
     if not growid then
-        growid, count_str, item_name = string.match(text, "([%w_]+)%s+places%s+(%d+)%s+(.-)$")
+        growid, count_str, item_name = string.match(clean, "([%w_]+)%s+places%s+(%d+)%s+(.-)$")
     end
 
     if growid and count_str and item_name then
@@ -140,10 +149,10 @@ local function parseDonation(clean_text)
         item_name = string.gsub(item_name, "%.+$", "")
         item_name = string.gsub(item_name, "^%s*(.-)%s*$", "%1")
 
-        return growid, count, item_name
+        return growid, count, item_name, clean
     end
 
-    return nil, nil, nil
+    return nil, nil, nil, clean
 end
 
 -- Fungsi mengirim data deposit ke Webhook Server Bot Discord
@@ -201,41 +210,34 @@ local function handleMessage(raw_message, source_tag)
         return
     end
 
-    local clean = removeColor(tostring(raw_message))
-    local lower = string.lower(clean)
+    local growid, count, raw_item, clean_text = parseDonation(raw_message)
+    local lower = string.lower(clean_text)
 
     -- Debug: Tampilkan pesan apapun yang masuk ke log Lucifer
     if CONFIG.DEBUG_MODE then
-        -- Saring spam umum seperti ping/pong agar tidak terlalu bising
+        -- Saring spam umum seperti ping/pong/action agar tidak terlalu bising
         if not string.find(lower, "ping") and not string.find(lower, "action|") then
-            print(string.format("[DEBUG][%s] %s", source_tag or "IN", clean))
+            print(string.format("[DEBUG][%s] %s", source_tag or "CHAT", clean_text))
         end
     end
 
-    -- Cek kata kunci donasi
-    if string.find(lower, "donat") or string.find(lower, "places") or string.find(lower, "deposited") or string.find(lower, "donation box") then
-        print("[MATCHING CANDIDATE] " .. clean)
-        local growid, count, raw_item = parseDonation(clean)
-        
-        if growid and count and raw_item then
-            local rate, valid_item_name = getItemRate(raw_item)
-            if rate > 0 and valid_item_name then
-                -- Cegah pemrosesan ganda
-                if not isDuplicate(growid, count, valid_item_name) then
-                    local total_wl = count * rate
-                    print(string.format(">>> [DONATION DETECTED] %s -> %d %s (=%d WL) <<<", growid, count, valid_item_name, total_wl))
-                    -- Jalankan pengiriman di background thread terpisah agar instan & tidak blocking
-                    runThread(function(g_id, c_count, i_name, wl_amount)
-                        notifyServer(g_id, c_count, i_name, wl_amount)
-                    end, growid, count, valid_item_name, total_wl)
-                else
-                    print("[DUPLICATE] Pesan donasi diabaikan karena baru saja diproses.")
-                end
+    -- Jika donasi terdeteksi
+    if growid and count and raw_item then
+        local rate, valid_item_name = getItemRate(raw_item)
+        if rate > 0 and valid_item_name then
+            -- Cegah pemrosesan ganda
+            if not isDuplicate(growid, count, valid_item_name) then
+                local total_wl = count * rate
+                print(string.format(">>> [DONATION DETECTED] %s -> %d %s (=%d WL) <<<", growid, count, valid_item_name, total_wl))
+                -- Jalankan pengiriman di background thread terpisah agar instan & tidak blocking
+                runThread(function(g_id, c_count, i_name, wl_amount)
+                    notifyServer(g_id, c_count, i_name, wl_amount)
+                end, growid, count, valid_item_name, total_wl)
             else
-                print("[DONATION IGNORED] Item '" .. tostring(raw_item) .. "' bukan WL/DL/BGL.")
+                print("[DUPLICATE] Pesan donasi diabaikan karena baru saja diproses.")
             end
         else
-            print("[PARSE FAILED] Pola donasi tidak cocok dengan parser: " .. clean)
+            print("[DONATION IGNORED] Item '" .. tostring(raw_item) .. "' bukan WL/DL/BGL.")
         end
     end
 end
@@ -301,44 +303,65 @@ runThread(function()
 end)
 
 -- ==============================================================================
--- 2. ACTIVE CONSOLE & HISTORY SCANNER
+-- 2. DEDICATED CONSOLE & HISTORY SCANNER THREAD (Berjalan Terus Setiap 250ms)
 -- ==============================================================================
-local last_scanned_console = ""
-local scanned_history_set = {}
+runThread(function()
+    print("[THREAD] Dedicated Console & Log Scanner Aktif!")
+    local last_scanned_console = ""
+    local last_scanned_log = ""
+    local scanned_history_set = {}
 
-local function scanConsoleAndHistory()
-    -- A. Pindai Console Log bawaan Lucifer
-    pcall(function()
-        local c = getConsole()
-        if c and c.contents and c.contents ~= "" and c.contents ~= last_scanned_console then
-            local new_text = c.contents
-            last_scanned_console = new_text
-            for line in string.gmatch(new_text, "[^\r\n]+") do
-                local lower = string.lower(line)
-                if string.find(lower, "donat") or string.find(lower, "places") or string.find(lower, "deposited") then
-                    handleMessage(line, "ConsoleLog")
-                end
-            end
-        end
-    end)
+    while true do
+        sleep(250)
 
-    -- B. Pindai bot.history jika didukung
-    pcall(function()
-        local b = getBot()
-        if b and b.history then
-            for idx, hist_entry in ipairs(b.history) do
-                local h_str = tostring(hist_entry)
-                if not scanned_history_set[h_str] then
-                    scanned_history_set[h_str] = true
-                    local lower = string.lower(h_str)
-                    if string.find(lower, "donat") or string.find(lower, "places") or string.find(lower, "deposited") then
-                        handleMessage(h_str, "BotHistory")
+        -- A. Pindai getConsole().contents
+        pcall(function()
+            local c = getConsole()
+            if c and c.contents and c.contents ~= "" and c.contents ~= last_scanned_console then
+                local full_text = c.contents
+                last_scanned_console = full_text
+                for line in string.gmatch(full_text, "[^\r\n]+") do
+                    local lower = string.lower(line)
+                    if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
+                        handleMessage(line, "Console")
                     end
                 end
             end
-        end
-    end)
-end
+        end)
+
+        -- B. Pindai getLog().content
+        pcall(function()
+            local l = getLog()
+            if l and l.content and l.content ~= "" and l.content ~= last_scanned_log then
+                local full_text = l.content
+                last_scanned_log = full_text
+                for line in string.gmatch(full_text, "[^\r\n]+") do
+                    local lower = string.lower(line)
+                    if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
+                        handleMessage(line, "Log")
+                    end
+                end
+            end
+        end)
+
+        -- C. Pindai bot.history
+        pcall(function()
+            local b = getBot()
+            if b and b.history then
+                for _, hist_entry in ipairs(b.history) do
+                    local h_str = tostring(hist_entry)
+                    if not scanned_history_set[h_str] then
+                        scanned_history_set[h_str] = true
+                        local lower = string.lower(h_str)
+                        if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
+                            handleMessage(h_str, "BotHistory")
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end)
 
 -- ==============================================================================
 -- 3. MAIN LISTENER LOOP
@@ -355,14 +378,11 @@ end
 
 print("[INFO] Bot siap! Mendengarkan donation box di world " .. CONFIG.WORLD_NAME .. "...")
 
--- Loop utama: kombinasikan pumping event dan pemindaian konsol aktif secara berkala
+-- Loop utama: listenEvents dengan bounded interval 1 detik (tidak membekukan script)
 while true do
     pcall(function()
-        listenEvents(500)
+        listenEvents(1)
     end)
-
-    scanConsoleAndHistory()
-
     sleep(100)
 end
 
