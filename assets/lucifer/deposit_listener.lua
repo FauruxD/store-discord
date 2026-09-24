@@ -97,8 +97,8 @@ end
 local function parseDonation(raw_text)
     local raw_str = tostring(raw_text)
 
-    -- [SECURITY 1] Tolak jika teks mengandung tanda chat pemain (<GrowID>, : bicara, **, dll)
-    if string.find(raw_str, "<") or string.find(raw_str, ">") or string.find(raw_str, ":%s") or string.find(raw_str, "%*%*") then
+    -- [SECURITY 1] Tolak jika teks mengandung tanda chat pemain (<GrowID>, : bicara, **, CP:, OID:, dll)
+    if string.find(raw_str, "<") or string.find(raw_str, ">") or string.find(raw_str, ":%s") or string.find(raw_str, "%*%*") or string.find(raw_str, "CP:") or string.find(raw_str, "OID:") then
         return nil, nil, nil, raw_str
     end
 
@@ -256,9 +256,18 @@ addEvent(Event.generic_text, function(text)
     handleMessage(text, "generic_text")
 end)
 
--- 3. Daftarkan event variantlist (HANYA OnConsoleMessage)
+-- 3. Daftarkan event variantlist (HANYA OnConsoleMessage dari Server Sistem)
 -- [SECURITY 5] JANGAN dengarkan OnTalkBubble karena OnTalkBubble adalah gelembung chat pemain!
 addEvent(Event.variantlist, function(varlist, net_id)
+    -- [SECURITY 6] Validasi NetID: Di Growtopia, chat pemain memiliki net_id >= 0.
+    -- Notifikasi sistem resmi server (Donation Box, Server Announce) selalu memiliki net_id = -1.
+    if net_id and net_id ~= -1 and tostring(net_id) ~= "-1" then
+        if CONFIG.DEBUG_MODE then
+            print(string.format("[SECURITY REJECT] Pesan diabaikan karena net_id=%s (berasal dari pemain, BUKAN sistem server)", tostring(net_id)))
+        end
+        return
+    end
+
     pcall(function()
         local v0 = tostring(varlist[0] or "")
         local v1 = tostring(varlist[1] or "")
