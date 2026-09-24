@@ -65,14 +65,16 @@ local function isDuplicate(growid, count, item_name)
     local now = os.time()
     local key = string.lower(growid) .. ":" .. count .. ":" .. string.lower(item_name)
 
-    -- Hapus cache yang lebih dari 15 detik
+    -- Hapus cache yang lebih dari 10 detik
     for k, timestamp in pairs(recent_cache) do
-        if now - timestamp > 15 then
+        if now - timestamp > 10 then
             recent_cache[k] = nil
         end
     end
 
-    if recent_cache[key] and (now - recent_cache[key] <= 8) then
+    -- Window duplikasi 2 detik: menyaring echo event identik dalam hitungan milidetik,
+    -- tetapi mengizinkan donasi beruntun jika pemain mendepositkan lagi
+    if recent_cache[key] and (now - recent_cache[key] <= 2) then
         return true
     end
 
@@ -123,18 +125,19 @@ local function parseDonation(raw_text)
     local growid, count_str, item_name = nil, nil, nil
 
     -- [SECURITY 3] Format 1 (Standar Sistem Growtopia Resmi):
-    -- Pesan sistem GT WAJIB diawali kurung siku ganda [[ dan diakhiri into the Donation/Display Box]]
+    -- Menangani baik tanpa kurung, kurung tunggal [ ... ], maupun kurung ganda [[ ... ]]
     -- Contoh: "[[FaruuXes places 193 World Lock into the Donation Box]]"
-    growid, count_str, item_name = string.match(clean, "^%[%[([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into the Donation Box%]%]$")
+    -- atau: "[FaruuXes places 142 World Lock into the Donation Box]"
+    growid, count_str, item_name = string.match(clean, "^%[*([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into the Donation Box%]*$")
 
     if not growid then
-        growid, count_str, item_name = string.match(clean, "^%[%[([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into the Display Box%]%]$")
+        growid, count_str, item_name = string.match(clean, "^%[*([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into the Display Box%]*$")
     end
 
     -- Format 2 (Standar Sistem Alternatif Resmi GT):
     -- Contoh: "FaruuXes has donated 1 World Lock."
     if not growid then
-        growid, count_str, item_name = string.match(clean, "^([%w_]+)%s+has%s+donated%s+(%d+)%s+(.-)%.$")
+        growid, count_str, item_name = string.match(clean, "^%[*([%w_]+)%s+has%s+donated%s+(%d+)%s+(.-)%]*%.$")
     end
 
     if growid and count_str and item_name then
@@ -155,53 +158,58 @@ local function parseDonation(raw_text)
     return nil, nil, nil, clean
 end
 
--- Fungsi mengirim data deposit ke Webhook Server Bot Discord
+-- Fungsi mengirim data deposit ke Webhook Server Bot Discord secara ASINKRON (Non-Blocking)
+-- Menjalankan request di thread terpisah (runThread) dengan SELURUH parameter dilewatkan sebagai argumen.
+-- Dengan cara ini, thread event listener instan kembali (< 0.1ms) dan TIDAK AKAN PERNAH melewatkan deposit cepat!
 local function notifyServer(growid, count, item_name, amount_wl)
-    -- 1. Backup: Kirim notifikasi langsung via Discord Webhook jika ada
-    if CONFIG.DISCORD_WEBHOOK_URL and CONFIG.DISCORD_WEBHOOK_URL ~= "" then
-        pcall(function()
-            local hook = Webhook.new(CONFIG.DISCORD_WEBHOOK_URL)
-            hook.username = "Lucifer GT Deposit"
-            hook.content = string.format("🎉 **Deposit Terdeteksi!**\n👤 GrowID: **`%s`**\n📦 Item: **%d %s** (+%d WL)\n🌍 World: **`%s`**", growid, count, item_name, amount_wl, CONFIG.WORLD_NAME)
-            hook:send()
-        end)
-    end
+    runThread(function(api_url, secret_token, discord_webhook, world_name, enable_msg, g_id, c_count, i_name, wl_amount)
+        -- 1. Backup: Kirim notifikasi langsung via Discord Webhook jika ada
+        if discord_webhook and discord_webhook ~= "" then
+            pcall(function()
+                local hook = Webhook.new(discord_webhook)
+                hook.username = "Lucifer GT Deposit"
+                hook.content = string.format("🎉 **Deposit Terdeteksi!**\n👤 GrowID: **`%s`**\n📦 Item: **%d %s** (+%d WL)\n🌍 World: **`%s`**", g_id, c_count, i_name, wl_amount, world_name)
+                hook:send()
+            end)
+        end
 
-    -- 2. Kirim ke Server Bot Discord API
-    local client = HttpClient.new()
-    client.url = CONFIG.API_URL
-    client:setMethod(Method.post)
-    client.headers["Content-Type"] = "application/json"
-    client.headers["User-Agent"] = "Mozilla/5.0"
-    client.headers["X-GT-Token"] = CONFIG.SECRET_TOKEN
+        -- 2. Kirim ke Server Bot Discord API
+        local client = HttpClient.new()
+        client.url = api_url
+        client:setMethod(Method.post)
+        client.headers["Content-Type"] = "application/json"
+        client.headers["User-Agent"] = "Mozilla/5.0"
+        client.headers["X-GT-Token"] = secret_token
 
-    local payload = string.format(
-        '{"growid":"%s","item_name":"%s","count":%d,"amount_wl":%d,"world":"%s"}',
-        growid, item_name, count, amount_wl, CONFIG.WORLD_NAME
-    )
-    client.content = payload
-    client.timeout = 8
+        local payload = string.format(
+            '{"growid":"%s","item_name":"%s","count":%d,"amount_wl":%d,"world":"%s"}',
+            g_id, i_name, c_count, wl_amount, world_name
+        )
+        client.content = payload
+        client.timeout = 8
 
-    print("[HTTP] Mengirim deposit ke: " .. CONFIG.API_URL)
-    local result = client:request()
-    if result.error == 0 and result.status == 200 then
-        print(string.format("[SUCCESS] Terverifikasi: %s mendepositkan %d %s (+%d WL)", growid, count, item_name, amount_wl))
-        
-        -- Cek apakah user unclaimed atau sukses
-        if string.find(result.body or "", "unclaimed") then
-            if CONFIG.ENABLE_INGAME_MSG then
-                bot:say("/msg " .. growid .. " [STORE] GrowID kamu belum disetting di Discord! Ketik /setgrowid di bot Discord.")
+        print(string.format("[HTTP ASYNC] Mengirim deposit %s: %dx %s (+%d WL)", g_id, c_count, i_name, wl_amount))
+        local result = client:request()
+        if result.error == 0 and result.status == 200 then
+            print(string.format("[SUCCESS ASYNC] Terverifikasi: %s mendepositkan %d %s (+%d WL)", g_id, c_count, i_name, wl_amount))
+            
+            -- Cek apakah user unclaimed atau sukses
+            if enable_msg then
+                pcall(function()
+                    local b = getBot()
+                    if b then
+                        if string.find(result.body or "", "unclaimed") then
+                            b:say("/msg " .. g_id .. " [STORE] GrowID kamu belum disetting di Discord! Ketik /setgrowid di bot Discord.")
+                        else
+                            b:say("/msg " .. g_id .. " [STORE] Deposit " .. c_count .. "x " .. i_name .. " (+" .. wl_amount .. " WL) BERHASIL masuk!")
+                        end
+                    end
+                end)
             end
         else
-            if CONFIG.ENABLE_INGAME_MSG then
-                bot:say("/msg " .. growid .. " [STORE] Deposit " .. count .. "x " .. item_name .. " (+" .. amount_wl .. " WL) BERHASIL masuk!")
-            end
+            print(string.format("[ERROR ASYNC] Gagal mengirim deposit ke server. Status: %s, Error: %s, Body: %s", tostring(result.status), tostring(result.error), tostring(result.body)))
         end
-        return true
-    else
-        print(string.format("[ERROR] Gagal mengirim deposit ke server. Status: %s, Error: %s, Body: %s", tostring(result.status), tostring(result.error), tostring(result.body)))
-        return false
-    end
+    end, CONFIG.API_URL, CONFIG.SECRET_TOKEN, CONFIG.DISCORD_WEBHOOK_URL, CONFIG.WORLD_NAME, CONFIG.ENABLE_INGAME_MSG, growid, count, item_name, amount_wl)
 end
 
 -- Handler utama saat ada teks/pesan dari server Growtopia
@@ -382,7 +390,10 @@ while true do
             for line in string.gmatch(full_text, "[^\r\n]+") do
                 local lower = string.lower(line)
                 if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
-                    handleMessage(line, "Console")
+                    if not scanned_history_set[line] then
+                        scanned_history_set[line] = true
+                        handleMessage(line, "Console")
+                    end
                 end
             end
         end
@@ -397,7 +408,10 @@ while true do
             for line in string.gmatch(full_text, "[^\r\n]+") do
                 local lower = string.lower(line)
                 if string.find(lower, "places") or string.find(lower, "donat") or string.find(lower, "deposit") then
-                    handleMessage(line, "Log")
+                    if not scanned_history_set[line] then
+                        scanned_history_set[line] = true
+                        handleMessage(line, "Log")
+                    end
                 end
             end
         end
