@@ -72,9 +72,9 @@ local function isDuplicate(growid, count, item_name)
         end
     end
 
-    -- Window duplikasi 2 detik: menyaring echo event identik dalam hitungan milidetik,
-    -- tetapi mengizinkan donasi beruntun jika pemain mendepositkan lagi
-    if recent_cache[key] and (now - recent_cache[key] <= 2) then
+    -- Window duplikasi 1 detik: menyaring echo event identik dalam hitungan milidetik,
+    -- tetapi mengizinkan donasi beruntun jika pemain mendepositkan lagi (>= 1 detik)
+    if recent_cache[key] and (now - recent_cache[key] <= 1) then
         return true
     end
 
@@ -125,19 +125,19 @@ local function parseDonation(raw_text)
     local growid, count_str, item_name = nil, nil, nil
 
     -- [SECURITY 3] Format 1 (Standar Sistem Growtopia Resmi):
-    -- Menangani baik tanpa kurung, kurung tunggal [ ... ], maupun kurung ganda [[ ... ]]
-    -- Contoh: "[[FaruuXes places 193 World Lock into the Donation Box]]"
-    -- atau: "[FaruuXes places 142 World Lock into the Donation Box]"
-    growid, count_str, item_name = string.match(clean, "^%[*([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into the Donation Box%]*$")
+    -- Menangani baik OnConsoleMessage (tanpa prefix) maupun baris Console/Log dengan tag ([o][05:11:19])
+    -- Contoh: "[o][05:11:19] [[FaruuXes places 1 Diamond Lock into the Donation Box]]"
+    -- atau: "[[FaruuXes places 193 World Lock into the Donation Box]]"
+    growid, count_str, item_name = string.match(clean, "([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into the Donation Box")
 
     if not growid then
-        growid, count_str, item_name = string.match(clean, "^%[*([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into the Display Box%]*$")
+        growid, count_str, item_name = string.match(clean, "([%w_]+)%s+places%s+(%d+)%s+(.-)%s+into the Display Box")
     end
 
     -- Format 2 (Standar Sistem Alternatif Resmi GT):
     -- Contoh: "FaruuXes has donated 1 World Lock."
     if not growid then
-        growid, count_str, item_name = string.match(clean, "^%[*([%w_]+)%s+has%s+donated%s+(%d+)%s+(.-)%]*%.$")
+        growid, count_str, item_name = string.match(clean, "([%w_]+)%s+has%s+donated%s+(%d+)%s+(.-)%.$")
     end
 
     if growid and count_str and item_name then
@@ -163,12 +163,18 @@ end
 -- Dengan cara ini, thread event listener instan kembali (< 0.1ms) dan TIDAK AKAN PERNAH melewatkan deposit cepat!
 local function notifyServer(growid, count, item_name, amount_wl)
     runThread(function(api_url, secret_token, discord_webhook, world_name, enable_msg, g_id, c_count, i_name, wl_amount)
-        -- 1. Backup: Kirim notifikasi langsung via Discord Webhook jika ada
+        -- 1. Backup: Kirim notifikasi langsung via Discord Webhook jika ada (FORMAT EMBED)
         if discord_webhook and discord_webhook ~= "" then
             pcall(function()
                 local hook = Webhook.new(discord_webhook)
                 hook.username = "Lucifer GT Deposit"
-                hook.content = string.format("🎉 **Deposit Terdeteksi!**\n👤 GrowID: **`%s`**\n📦 Item: **%d %s** (+%d WL)\n🌍 World: **`%s`**", g_id, c_count, i_name, wl_amount, world_name)
+                hook.embed1.use = true
+                hook.embed1.title = "🎉 Deposit Terdeteksi!"
+                hook.embed1.color = 3066993 -- Hijau Emerald (0x2ECC71)
+                hook.embed1:addField("👤 GrowID", "`" .. g_id .. "`", true)
+                hook.embed1:addField("📦 Item", string.format("**%d %s** (+%d WL)", c_count, i_name, wl_amount), true)
+                hook.embed1:addField("🌍 World", "`" .. world_name .. "`", true)
+                hook.embed1.footer = "Lucifer GT Listener • Donation Box Auto Deposit"
                 hook:send()
             end)
         end
