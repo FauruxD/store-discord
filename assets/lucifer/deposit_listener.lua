@@ -174,12 +174,12 @@ local function handleMessage(raw_message)
     local clean = removeColor(raw_message)
     local lower = string.lower(clean)
 
-    -- Debug log saat mendeteksi kata kunci donasi
-    if string.find(lower, "donation box") or string.find(lower, "places") or string.find(lower, "deposited") then
+    -- Cetak ke konsol Lucifer jika mendeteksi teks berkaitan dengan game/donasi
+    if string.find(lower, "places") or string.find(lower, "donation box") or string.find(lower, "deposited") then
         print("[MATCHING LOG] " .. clean)
     end
 
-    -- Cek apakah pesan berkaitan dengan donasi box (bisa 'places' atau 'deposited')
+    -- Cek apakah pesan berkaitan dengan donasi box
     if (string.find(lower, "places") or string.find(lower, "deposited")) and string.find(lower, "donation box") then
         local growid, count, raw_item = parseDonation(clean)
         if growid and count and raw_item then
@@ -213,13 +213,21 @@ end)
 
 -- Daftarkan event variantlist (OnConsoleMessage & OnTalkBubble)
 addEvent(Event.variantlist, function(varlist, net_id)
-    if varlist[1] == "OnConsoleMessage" and varlist[2] then
-        handleMessage(varlist[2])
-    elseif varlist[1] == "OnTalkBubble" and varlist[3] then
-        handleMessage(varlist[3])
+    if type(varlist) == "table" then
+        if varlist[1] == "OnConsoleMessage" and varlist[2] then
+            handleMessage(varlist[2])
+        elseif varlist[1] == "OnTalkBubble" and varlist[3] then
+            handleMessage(varlist[3])
+        else
+            -- Cek semua elemen di varlist
+            for _, val in pairs(varlist) do
+                if type(val) == "string" and (string.find(string.lower(val), "places") or string.find(string.lower(val), "donation box")) then
+                    handleMessage(val)
+                end
+            end
+        end
     end
 end)
-
 
 -- Callback saat script dihentikan
 function on_stop(err)
@@ -231,36 +239,49 @@ function on_stop(err)
 end
 
 -- ==============================================================================
--- MAIN LOOP CEPAT & INSTAN (Tetap berada di World Deposit & Menjaga Koneksi)
+-- 1. WATCHDOG THREAD (Memastikan Bot Selalu di World Deposit)
 -- ==============================================================================
-while true do
-    if bot.status == BotStatus.online then
-        -- Cek apakah bot berada di world tujuan
-        if not bot:isInWorld(CONFIG.WORLD_NAME) then
-            print("[INFO] Bot belum berada di world " .. CONFIG.WORLD_NAME .. ". Melakukan warp...")
-            if CONFIG.DOOR_ID ~= "" then
-                bot:warp(CONFIG.WORLD_NAME, CONFIG.DOOR_ID)
-            else
-                bot:warp(CONFIG.WORLD_NAME)
-            end
-            sleep(3500)
-        else
-            -- Dengarkan event secara instan dan aman (dilindungi pcall)
-            local ok, res = pcall(function()
-                listenEvents(3)
-            end)
-            if not ok then
-                if string.find(string.lower(tostring(res)), "exit_mode") then
-                    break
+runThread(function()
+    while true do
+        sleep(4000)
+        local b = getBot()
+        if b and b.status == BotStatus.online then
+            if not b:isInWorld(CONFIG.WORLD_NAME) then
+                print("[WATCHDOG] Bot tidak berada di world " .. CONFIG.WORLD_NAME .. ". Melakukan warp...")
+                if CONFIG.DOOR_ID ~= "" then
+                    b:warp(CONFIG.WORLD_NAME, CONFIG.DOOR_ID)
+                else
+                    b:warp(CONFIG.WORLD_NAME)
                 end
-                sleep(500)
+                sleep(4000)
             end
         end
-    else
-        print("[INFO] Menunggu bot online...")
-        sleep(2000)
     end
-    sleep(100)
+end)
+
+-- ==============================================================================
+-- 2. MAIN LISTENER (Dengarkan Event Terus Menerus Tanpa Timeout Cepat)
+-- ==============================================================================
+-- Cek posisi awal bot
+if not bot:isInWorld(CONFIG.WORLD_NAME) then
+    print("[INFO] Bot belum berada di world " .. CONFIG.WORLD_NAME .. ". Memulai warp...")
+    if CONFIG.DOOR_ID ~= "" then
+        bot:warp(CONFIG.WORLD_NAME, CONFIG.DOOR_ID)
+    else
+        bot:warp(CONFIG.WORLD_NAME)
+    end
+    sleep(4000)
 end
+
+print("[INFO] Bot siap! Mendengarkan donation box di world " .. CONFIG.WORLD_NAME .. "...")
+
+-- Loop utama mendengarkan event dengan durasi panjang agar tidak keluar/crash
+while true do
+    pcall(function()
+        listenEvents(3600)
+    end)
+    sleep(500)
+end
+
 
 
